@@ -6,7 +6,7 @@ Python 표준 라이브러리와 Tkinter로 만든 한국어 Windows Ollama 관�
 
 별도 Python 설치 없이 단일 파일 `Ollama_Park.exe`를 더블클릭하면 실행됩니다.
 
-**[Ollama_Park.exe 다운로드](./Ollama_Park.exe)**
+**[Ollama_Park.exe 바로 다운로드](https://raw.githubusercontent.com/shoutjoy/OllamaServer/main/Ollama_Park.exe)**
 
 소스에서 실행하려면 Python 3.10 이상(Tkinter 포함)으로:
 
