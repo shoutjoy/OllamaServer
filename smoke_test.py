@@ -2,6 +2,7 @@
 import time
 from unittest.mock import patch
 from app import App
+from installer_download import DownloadCancelled
 
 
 def get(path, timeout=4):
@@ -44,6 +45,33 @@ with patch('app.Client.get', side_effect=get), patch('app.Client.stream', side_e
     app.tags.set('1b')
     app.pick_tag()
     assert app.target.get() == 'test:1b'
+    import tkinter as tk
+    from tkinter.scrolledtext import ScrolledText
+    description = '긴 모델 설명 / 크기 / 정보 ' * 200
+    app.results.item(app.results.selection()[0], values=('test', description))
+    app.show_model_details()
+    app.update()
+    detail = [w for w in app.winfo_children() if isinstance(w, tk.Toplevel)][-1]
+    def descendants(widget):
+        for child in widget.winfo_children():
+            yield child
+            yield from descendants(child)
+    body = next(w for w in descendants(detail) if isinstance(w, ScrolledText))
+    assert body.get('1.0', 'end-1c') == description
+    assert body.cget('wrap') == 'word'
+    with patch('app.webbrowser.open') as opener:
+        app.open_model_site()
+        opener.assert_called_once_with('https://ollama.com/library/test')
+    def pull_command(args, output):
+        assert args == ['fake-ollama', 'pull', 'test:1b']
+        output('pulling manifest\nsuccess\n')
+        return 0
+    with patch('app.find_ollama', return_value='fake-ollama'), patch('app.ConsoleRunner.run', side_effect=pull_command):
+        app.pull_in_console()
+        settle()
+    assert app.notebook.select() == str(app.console_tab)
+    assert 'pulling manifest' in app.console_view.get('1.0', 'end')
+    detail.destroy()
     app.pull()
     settle()
     assert app.progress['value'] == 100
@@ -75,5 +103,41 @@ with patch('app.Client.get', side_effect=get), patch('app.Client.stream', side_e
     app.console_clear()
     assert not app.console_view.get('1.0', 'end').strip()
     assert app.winfo_width() >= 840
+    with patch('app.download_installer') as download:
+        app.install_nav_button.invoke()
+        app.update()
+        assert app.notebook.select() == str(app.install_tab)
+        download.assert_not_called()
+    def cancelled_download(path, cancel, progress):
+        progress(1024, 2048)
+        if not cancel.wait(3):
+            raise AssertionError('Stop button did not cancel download')
+        raise DownloadCancelled()
+    with patch('app.messagebox.askyesno', return_value=True), \
+         patch('app.download_installer', side_effect=cancelled_download), \
+         patch('app.subprocess.Popen') as installer_launch:
+        for _ in range(2):
+            app.install_button.invoke()
+            assert str(app.install_button['state']) == 'disabled'
+            assert str(app.stop_download_button['state']) == 'normal'
+            app.stop_download_button.invoke()
+            settle()
+            assert '다운로드 중지됨' in app.download_status.get()
+            assert str(app.stop_download_button['state']) == 'disabled'
+            assert str(app.install_button['state']) == 'normal'
+        installer_launch.assert_not_called()
+    with patch('app.messagebox.askyesno', return_value=True), \
+         patch('app.InstallTerminalRunner.run', side_effect=lambda args, output: (output('SCRIPT TEST OUTPUT\n'), 0)[1]):
+        app.script_buttons['Windows'].invoke()
+        settle()
+        assert 'SCRIPT TEST OUTPUT' in app.install_terminal_view.get('1.0', 'end')
+        assert '스크립트 실행 완료' in app.install_terminal_view.get('1.0', 'end')
+        assert not app.install_terminal_active
+        assert str(app.script_buttons['Linux']['state']) == 'disabled'
+        assert str(app.script_buttons['Darwin']['state']) == 'disabled'
+    app.geometry('840x650')
+    app.update()
+    assert app.install_input.winfo_ismapped(), 'Install input must remain accessible at minimum size'
+    assert app.install_terminal_view.winfo_height() >= 50, 'Terminal must remain usable at minimum size'
     app.close()
-print('PASS: Tk window, search, pull, chat, console execution/output/history/validation/clear')
+print('PASS: Tk window, search, pull, chat, console, install tab navigation, download stop/retry, embedded install output (mock transport)')

@@ -1,6 +1,7 @@
 """Korean Tkinter desktop manager for a local Ollama installation."""
 import json
 import os
+import platform
 import queue
 import shlex
 import subprocess
@@ -11,9 +12,13 @@ import webbrowser
 from pathlib import Path
 from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
+from urllib.parse import quote
 
-from core import Client, INSTALL_URL, NO_WINDOW, fetch_tags, find_ollama, model_name, open_url, search_models
+from core import Client, NO_WINDOW, fetch_tags, find_ollama, model_name, models_directory, search_models
 from console_runner import ANSI, ConsoleRunner
+from installer_download import DownloadCancelled, download_installer
+from install_commands import COMMANDS, install_args
+from install_terminal import InstallTerminalRunner
 
 DATA = Path(__file__).resolve().parent / '.data'
 
@@ -29,17 +34,21 @@ class App(tk.Tk):
         self.client = Client()
         self.process = None
         self.console_runner = ConsoleRunner()
+        self.install_terminal_active = False
         self.command_history = []
         self.command_index = 0
         self.last_pull_log = None
         self.busy = set()
         self.cancel = threading.Event()
+        self.installer_cancel = threading.Event()
+        self.installer_path = DATA / 'OllamaSetup.exe'
         self.history = []
         self.online = False
         self.closed = False
         self.tag_request = 0
         self.status = tk.StringVar(value='서버 확인 중…')
         self.install_status = tk.StringVar(value='Ollama 설치 확인 중…')
+        self.download_status = tk.StringVar(value='설치 파일 다운로드 대기')
         self.selected = tk.StringVar()
         self.target = tk.StringVar(value='gemma3:1b')
         self.query = tk.StringVar()
@@ -74,10 +83,18 @@ class App(tk.Tk):
         self.server_light_dot = self.server_light.create_oval(4, 5, 18, 19, fill='#94a3b8', outline='')
         self.server_status_label = ttk.Label(server, textvariable=self.status)
         self.server_status_label.pack(side='left', padx=(0, 14))
-        for label, command in [('Ollama 설치', self.install), ('서버 시작', self.start_server),
-                               ('서버 정지', self.stop_server), ('새로고침', self.refresh)]:
+        for label, command in [('서버 시작', self.start_server), ('서버 정지', self.stop_server),
+                               ('새로고침', self.refresh), ('챗 열기', self.open_chat)]:
             ttk.Button(server, text=label, command=command).pack(side='left', padx=3)
+        self.install_nav_button = ttk.Button(server, text='Ollama 설치', command=self.show_install_tab)
+        self.install_nav_button.pack(side='right', padx=3)
         ttk.Label(outer, textvariable=self.install_status).pack(anchor='w', pady=8)
+        folders = ttk.Frame(outer)
+        folders.pack(fill='x', pady=(0, 8))
+        ttk.Button(folders, text='Ollama 설치 폴더 열기',
+                   command=lambda: self.open_ollama_folder('install')).pack(side='left')
+        ttk.Button(folders, text='모델 다운로드 폴더 열기',
+                   command=lambda: self.open_ollama_folder('models')).pack(side='left', padx=(8, 0))
         row = ttk.Frame(outer)
         row.pack(fill='x', pady=(0, 12))
         ttk.Label(row, text='사용할 모델').pack(side='left', padx=(0, 10))
@@ -85,7 +102,6 @@ class App(tk.Tk):
         self.models.pack(side='left', fill='x', expand=True)
         self.models.bind('<<ComboboxSelected>>', self.select_model)
         ttk.Button(row, text='모델 목록 갱신', command=self.refresh).pack(side='left', padx=(8, 0))
-        ttk.Button(row, text='챗 열기', command=self.open_chat).pack(side='left', padx=(8, 0))
         notebook = ttk.Notebook(outer)
         self.notebook = notebook
         notebook.pack(fill='both', expand=True)
@@ -95,6 +111,7 @@ class App(tk.Tk):
         notebook.add(catalog, text='  모델 검색 · 설치  ')
         notebook.add(chat, text='  대화  ')
         notebook.add(logs, text='  작업 로그  ')
+        self.build_install_tab()
         self.console_tab = ttk.Frame(notebook, padding=14)
         notebook.add(self.console_tab, text='  CONSOLE  ')
         ttk.Label(self.console_tab, text='Ollama 명령 실행 · Enter 전송 · ↑/↓ 명령 기록 · 실행 중 입력은 표준 입력으로 전달').pack(anchor='w', pady=(0, 8))
@@ -117,6 +134,18 @@ class App(tk.Tk):
                            'ollama pull gemma3:1b / ollama run gemma3:1b "안녕하세요"\n'
                            '서버 시작: ollama serve · 서버 정지: /server-stop\n'
                            '일반 CMD/PowerShell 셸이 아닌 Ollama 전용 콘솔입니다.\n\n')
+        self.access_log_tab = ttk.Frame(notebook, padding=14)
+        notebook.add(self.access_log_tab, text='  접속 LOG  ')
+        access_header = ttk.Frame(self.access_log_tab)
+        access_header.pack(fill='x', pady=(0, 8))
+        ttk.Label(access_header, text='AI 접속 및 사용 기록 · 서버 연결, 모델, 질문, 응답, 오류').pack(side='left')
+        ttk.Button(access_header, text='기록 지우기', command=self.clear_access_log).pack(side='right')
+        self.access_log_view = ScrolledText(
+            self.access_log_tab, state='disabled', wrap='word', bg='#101827', fg='#d6e4f0',
+            insertbackground='white', font=('Consolas', 10), relief='flat', padx=12, pady=12)
+        self.access_log_view.pack(fill='both', expand=True)
+        self.load_access_log()
+        self.access_log('APP', 'Ollama Desk 실행')
         row = ttk.Frame(catalog)
         row.pack(fill='x')
         entry = ttk.Entry(row, textvariable=self.query)
@@ -137,6 +166,13 @@ class App(tk.Tk):
         scroll.pack(side='right', fill='y')
         self.results.pack(fill='both', expand=True)
         self.results.bind('<<TreeviewSelect>>', self.pick_result)
+        self.results.bind('<Double-1>', self.show_model_details)
+        self.results.bind('<Return>', self.show_model_details)
+        actions = ttk.Frame(catalog)
+        actions.pack(fill='x', pady=(6, 0))
+        ttk.Button(actions, text='전체 설명 · 새 창', command=self.show_model_details).pack(side='left')
+        ttk.Button(actions, text='선택 모델 공식 사이트', command=self.open_model_site).pack(side='left', padx=6)
+        ttk.Button(actions, text='콘솔에서 pull', command=self.pull_in_console).pack(side='left')
         row = ttk.Frame(catalog)
         row.pack(fill='x', pady=(14, 6))
         ttk.Label(row, text='설치 모델').pack(side='left', padx=(0, 8))
@@ -162,6 +198,143 @@ class App(tk.Tk):
         self.send_button.pack(side='right', padx=8)
         self.log_view = ScrolledText(logs, state='disabled', wrap='word', font=('맑은 고딕', 10))
         self.log_view.pack(fill='both', expand=True)
+
+    def show_install_tab(self):
+        self.notebook.select(self.install_tab)
+
+    def build_install_tab(self):
+        self.install_tab = ttk.Frame(self.notebook, padding=12)
+        self.notebook.add(self.install_tab, text='  Ollama 설치  ')
+        self.install_canvas = tk.Canvas(self.install_tab, bg='#f3f5f9', highlightthickness=0)
+        scroll = ttk.Scrollbar(self.install_tab, orient='vertical', command=self.install_canvas.yview)
+        scroll.pack(side='right', fill='y')
+        self.install_canvas.configure(yscrollcommand=scroll.set)
+        self.install_canvas.pack(side='left', fill='both', expand=True)
+        body = ttk.Frame(self.install_canvas)
+        body_window = self.install_canvas.create_window((0, 0), window=body, anchor='nw')
+        body.bind('<Configure>', lambda _: self.install_canvas.configure(scrollregion=self.install_canvas.bbox('all')))
+        self.install_canvas.bind('<Configure>', lambda event: self.install_canvas.itemconfigure(
+            body_window, width=event.width, height=max(event.height, body.winfo_reqheight())))
+        download = ttk.LabelFrame(body, text='Windows 다운로드 앱으로 설치', padding=8)
+        download.pack(fill='x')
+        self.install_button = ttk.Button(download, text='Windows 다운로드 앱으로 설치', command=self.install,
+                                         state='normal' if platform.system() == 'Windows' else 'disabled')
+        self.install_button.pack(anchor='w')
+        location = ttk.Entry(download)
+        location.insert(0, str(self.installer_path))
+        location.configure(state='readonly')
+        location.pack(fill='x', pady=4)
+        controls = ttk.Frame(download)
+        controls.pack(fill='x')
+        ttk.Button(controls, text='다운로드 폴더 열기', command=self.open_download_folder).pack(side='left')
+        self.stop_download_button = ttk.Button(controls, text='다운로드 중지',
+                                               command=self.stop_installer_download, state='disabled')
+        self.stop_download_button.pack(side='left', padx=8)
+        ttk.Label(download, textvariable=self.download_status).pack(anchor='w')
+        scripts = ttk.LabelFrame(body, text='앱 내부 터미널로 설치 · 현재 OS: ' + platform.system(), padding=8)
+        scripts.pack(fill='x', pady=6)
+        scripts.columnconfigure(1, weight=1)
+        self.script_buttons = {}
+        for row, (system, label) in enumerate([('Windows', '윈도우'), ('Linux', '리눅스'), ('Darwin', '맥')]):
+            button = ttk.Button(scripts, text=label + ' 터미널 설치',
+                                command=lambda os_name=system: self.start_terminal_install(os_name),
+                                state='normal' if system == platform.system() else 'disabled')
+            button.grid(row=row, column=0, sticky='w', pady=2)
+            self.script_buttons[system] = button
+            command = ttk.Entry(scripts, width=40)
+            command.insert(0, COMMANDS[system])
+            command.configure(state='readonly')
+            command.grid(row=row, column=1, sticky='ew', padx=6)
+            ttk.Button(scripts, text='복사', command=lambda os_name=system: self.copy_install_command(os_name)).grid(row=row, column=2)
+        ttk.Label(body, text='현재 OS만 실행 가능 · 권한 확인창은 별도로 표시될 수 있습니다.\n중지는 이미 설치된 파일을 되돌리지 않습니다.').pack(anchor='w')
+        self.install_terminal_view = ScrolledText(body, height=6, state='disabled', wrap='word',
+                                                bg='#101827', fg='#d6e4f0', font=('Consolas', 10))
+        self.install_terminal_view.pack(fill='both', expand=True, pady=5)
+        inputs = ttk.Frame(body)
+        inputs.pack(fill='x')
+        self.install_input = ttk.Entry(inputs, show='*')
+        self.install_input.pack(side='left', fill='x', expand=True)
+        self.install_input.bind('<Return>', self.send_install_input)
+        ttk.Button(inputs, text='입력 전송', command=self.send_install_input).pack(side='left', padx=6)
+        self.stop_terminal_button = ttk.Button(inputs, text='터미널 중지', command=self.stop_terminal_install, state='disabled')
+        self.stop_terminal_button.pack(side='left')
+        self.install_terminal_write('설치 방법을 선택하세요. 출력은 이곳에 표시됩니다.\n입력란은 암호를 가려 표시하며 전송한 내용을 로그에 기록하지 않습니다.\n')
+
+    def copy_install_command(self, system):
+        self.clipboard_clear()
+        self.clipboard_append(COMMANDS[system])
+
+    def install_terminal_write(self, text):
+        self.append(self.install_terminal_view, ANSI.sub('', text).replace('\r', '\n'))
+        if int(self.install_terminal_view.index('end-1c').split('.')[0]) > 6000:
+            self.install_terminal_view.configure(state='normal')
+            self.install_terminal_view.delete('1.0', '1000.0')
+            self.install_terminal_view.configure(state='disabled')
+
+    def send_install_input(self, _=None):
+        if self.install_terminal_active:
+            value = self.install_input.get()
+            self.install_input.delete(0, 'end')
+            try:
+                self.console_runner.send(value)
+            except (OSError, RuntimeError) as exc:
+                self.install_terminal_write(str(exc) + '\n')
+        return 'break'
+
+    def stop_terminal_install(self):
+        if self.install_terminal_active:
+            self.stop_terminal_button.configure(state='disabled')
+            self.install_terminal_write('\n[중지 요청 · 설치된 파일은 자동으로 제거되지 않습니다.]\n')
+            runner = self.console_runner
+            def stop():
+                try:
+                    runner.stop()
+                except Exception as exc:
+                    self.emit(self.install_terminal_write, f'\n[중지 실패] {exc}\n')
+                    self.emit(lambda: self.stop_terminal_button.configure(state='normal')
+                              if self.install_terminal_active and self.console_runner is runner else None)
+            threading.Thread(target=stop, daemon=True).start()
+
+    def terminal_install_finished(self):
+        self.install_terminal_active = False
+        self.install_input.delete(0, 'end')
+        self.stop_terminal_button.configure(state='disabled')
+        self.install_button.configure(state='normal' if platform.system() == 'Windows' else 'disabled')
+        for system, button in self.script_buttons.items():
+            button.configure(state='normal' if system == platform.system() else 'disabled')
+        self.refresh()
+
+    def start_terminal_install(self, system):
+        self.show_install_tab()
+        if {'console', 'installer', 'pull', 'chat', 'server'} & self.busy:
+            messagebox.showinfo('작업 진행 중', '현재 작업을 완료하거나 중지한 뒤 설치하세요.', parent=self)
+            return
+        try:
+            args = install_args(system)
+        except ValueError as exc:
+            messagebox.showerror('터미널 설치', str(exc), parent=self)
+            return
+        if not messagebox.askyesno('터미널 설치', '아래 공식 스크립트를 다운로드하여 이 컴퓨터에 실행합니다.\n설치 또는 업데이트로 시스템이 변경되며 관리자 권한을 요청할 수 있습니다.\n\n' + COMMANDS[system] + '\n\n실행할까요?', parent=self):
+            return
+        self.console_runner = InstallTerminalRunner()
+        runner = self.console_runner
+        self.install_terminal_active = True
+        self.install_button.configure(state='disabled')
+        for button in self.script_buttons.values():
+            button.configure(state='disabled')
+        self.stop_terminal_button.configure(state='normal')
+        self.install_canvas.yview_moveto(1)
+        self.install_terminal_write('\n> ' + COMMANDS[system] + '\n')
+        def work():
+            try:
+                code = runner.run(args, lambda text: self.emit(self.install_terminal_write, text))
+                status = '중지됨' if runner.cancel.is_set() else ('스크립트 실행 완료' if code == 0 else '실패')
+                self.emit(self.install_terminal_write, f'\n[{status} · 종료 코드 {code}]\n')
+            except Exception as exc:
+                self.emit(self.install_terminal_write, f'\n[실행 실패] {exc}\n')
+            finally:
+                self.emit(self.terminal_install_finished)
+        self.job('console', work, quiet=True)
 
     def open_chat(self):
         path = Path(__file__).resolve().parent / 'CHAT' / 'ollama-say.html'
@@ -206,6 +379,45 @@ class App(tk.Tk):
         self.append(self.log_view, time.strftime('[%H:%M:%S] ') + text + '\n')
         self.console_write(time.strftime('[%H:%M:%S] ') + text + '\n')
 
+    @property
+    def access_log_path(self):
+        return DATA / 'access.log'
+
+    def load_access_log(self):
+        try:
+            text = self.access_log_path.read_text('utf-8')
+        except FileNotFoundError:
+            text = 'AI 접속 및 사용 기록이 이곳에 표시됩니다.\n\n'
+        except OSError as exc:
+            text = f'[기존 기록 읽기 실패] {exc}\n\n'
+        self.append(self.access_log_view, text)
+
+    def access_log(self, event, detail):
+        """Write a timestamped, local-only AI activity record."""
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+        entry = f'[{timestamp}] [{event}] {detail}\n'
+        self.append(self.access_log_view, entry)
+        try:
+            DATA.mkdir(exist_ok=True)
+            with self.access_log_path.open('a', encoding='utf-8') as output:
+                output.write(entry)
+        except OSError as exc:
+            self.append(self.access_log_view, f'[기록 저장 실패] {exc}\n')
+
+    def clear_access_log(self):
+        if not messagebox.askyesno('접속 LOG 지우기', '저장된 AI 접속 및 사용 기록을 모두 지울까요?', parent=self):
+            return
+        try:
+            DATA.mkdir(exist_ok=True)
+            self.access_log_path.write_text('', encoding='utf-8')
+        except OSError as exc:
+            messagebox.showerror('기록 지우기 실패', str(exc), parent=self)
+            return
+        self.access_log_view.configure(state='normal')
+        self.access_log_view.delete('1.0', 'end')
+        self.access_log_view.configure(state='disabled')
+        self.access_log('LOG', '사용자가 기록을 지웠습니다.')
+
     def console_write(self, text):
         text = ANSI.sub('', text).replace('\r', '\n')
         self.append(self.console_view, text)
@@ -225,6 +437,9 @@ class App(tk.Tk):
         return 'break'
 
     def console_execute(self, _=None):
+        if self.install_terminal_active:
+            self.show_install_tab()
+            return 'break'
         text = self.command.get().strip()
         if not text:
             return 'break'
@@ -270,6 +485,9 @@ class App(tk.Tk):
         return 'break'
 
     def console_stop(self):
+        if self.install_terminal_active:
+            self.stop_terminal_install()
+            return
         if 'console' in self.busy:
             self.console_runner.stop()
             self.console_write('\n[명령 중지 요청 — Ollama 서버는 유지됩니다.]\n')
@@ -303,10 +521,32 @@ class App(tk.Tk):
         if key == 'pull':
             self.progress_text.set(text)
         if key == 'chat':
+            self.access_log('AI 오류', text)
             self.append(self.transcript, '\n[응답 실패] ' + text + '\n')
             self.send_button.configure(state='normal')
         if not quiet:
             messagebox.showerror('작업 안내', text, parent=self)
+
+    def open_ollama_folder(self, kind):
+        try:
+            if kind == 'install':
+                executable = find_ollama()
+                if not executable:
+                    messagebox.showinfo('설치 폴더', 'Ollama 설치 위치를 찾지 못했습니다. 먼저 설치하거나 PATH를 확인하세요.', parent=self)
+                    return
+                folder = Path(executable).resolve().parent
+            else:
+                folder = models_directory()
+            if not folder.is_dir():
+                messagebox.showinfo('폴더 없음', f'아직 폴더가 없거나 접근할 수 없습니다.\n{folder}\n\n모델 다운로드 전이라면 먼저 모델을 설치하세요.\n사용자 지정 위치는 OLLAMA_MODELS 설정 후 앱을 다시 실행하세요.', parent=self)
+                return
+            if os.name == 'nt':
+                os.startfile(str(folder))
+            else:
+                webbrowser.open(folder.as_uri())
+            self.log(f'폴더 열기: {folder}')
+        except OSError as exc:
+            messagebox.showerror('폴더 열기 실패', str(exc), parent=self)
 
     def refresh(self):
         if 'installer' not in self.busy:
@@ -330,6 +570,7 @@ class App(tk.Tk):
         self.server_status_label.configure(foreground='#15803d' if self.online else '#64748b')
         if self.online and not was_online:
             self.log('서버 동작 확인: Ollama가 요청을 받을 준비가 되었습니다.')
+            self.access_log('접속', f'Ollama 서버 연결 · version={version} · 127.0.0.1:11434')
             self.bell()
             notice = tk.Toplevel(self)
             notice.title('Ollama 서버 알림')
@@ -340,6 +581,7 @@ class App(tk.Tk):
             notice.after(3500, notice.destroy)
         elif was_online and not self.online:
             self.log('서버 응답이 없어 표시등을 껐습니다.')
+            self.access_log('접속 종료', 'Ollama 서버 응답 없음 · 127.0.0.1:11434')
         names = [m['name'] for m in models]
         self.models.configure(values=names)
         if names and self.selected.get() not in names:
@@ -421,6 +663,32 @@ class App(tk.Tk):
             raise RuntimeError('서버가 여전히 응답합니다. 시스템 트레이나 서비스 설정을 확인하세요.')
         self.job('server', work, lambda text: (self.log(text), self.refresh()))
 
+    def open_download_folder(self):
+        try:
+            self.installer_path.parent.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(self.installer_path.parent))
+        except OSError as exc:
+            messagebox.showerror('다운로드 폴더 열기', str(exc), parent=self)
+
+    def stop_installer_download(self):
+        self.installer_cancel.set()
+        self.stop_download_button.configure(state='disabled')
+        self.download_status.set('다운로드 중지 중… 네트워크 응답 대기 시 약 10초 걸릴 수 있습니다.')
+
+    def installer_finished(self):
+        self.stop_download_button.configure(state='disabled')
+        self.install_button.configure(state='normal')
+
+    def launch_installer(self, installer, launched):
+        # The main UI thread orders a stop click against installer launch.
+        try:
+            if not self.installer_cancel.is_set() and not self.closed:
+                self.stop_download_button.configure(state='disabled')
+                self.download_status.set('다운로드 완료 · 설치 마법사에서 설치를 완료하세요.')
+                launched.append(subprocess.Popen([str(installer)]))
+        except Exception as exc:
+            launched.append(exc)
+
     def install(self):
         if 'console' in self.busy:
             messagebox.showinfo('명령 실행 중', '콘솔 명령을 먼저 중지하세요.')
@@ -430,41 +698,65 @@ class App(tk.Tk):
             return
         if 'installer' in self.busy:
             return
-        if not messagebox.askyesno('Ollama 설치', '공식 Windows 설치 파일을 다운로드하고 실행합니다.\n설치 마법사에서 설치를 완료해 주세요. 계속할까요?'):
+        if not messagebox.askyesno('Ollama 설치', f'공식 Windows 설치 파일을 다운로드하고 실행합니다.\n\n저장 위치: {self.installer_path}\n\n다운로드 중에는 중지할 수 있습니다.\n설치 마법사 실행 후에는 마법사에서 취소하세요. 계속할까요?', parent=self):
             return
+        self.installer_cancel.clear()
+        self.install_button.configure(state='disabled')
+        self.stop_download_button.configure(state='normal')
+        self.download_status.set('설치 파일 다운로드 연결 중…')
         def work():
-            DATA.mkdir(exist_ok=True)
-            installer = DATA / 'OllamaSetup.exe'
-            partial = installer.with_suffix('.download')
+            installer = self.installer_path
             try:
-                with open_url(INSTALL_URL, timeout=60) as response, partial.open('wb') as output:
-                    total = int(response.headers.get('Content-Length', 0))
-                    count = 0
-                    while True:
-                        chunk = response.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        output.write(chunk)
-                        count += len(chunk)
-                        self.emit(self.install_status.set, f'설치 파일 다운로드: {count / 1048576:.1f} MB' + (f' / {total / 1048576:.1f} MB' if total else ''))
-                    if total and count != total:
-                        raise RuntimeError('설치 파일 다운로드가 불완전합니다.')
-                partial.replace(installer)
+                last_update = 0
+                def progress(count, total):
+                    nonlocal last_update
+                    now = time.monotonic()
+                    if now - last_update >= 0.2 or count == total:
+                        last_update = now
+                        text = f'설치 파일 다운로드: {count / 1048576:.1f} MB' + (f' / {total / 1048576:.1f} MB' if total else '')
+                        self.emit(lambda: None if self.installer_cancel.is_set() else self.download_status.set(text))
+                download_installer(installer, self.installer_cancel, progress)
+                if self.installer_cancel.is_set():
+                    raise DownloadCancelled()
+                self.emit(self.download_status.set, '다운로드 완료 · 디지털 서명 확인 중…')
                 path = str(installer).replace("'", "''")
                 script = "$s=Get-AuthenticodeSignature -LiteralPath '" + path + "'; if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'Ollama') { exit 1 }"
                 verified = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
                                           creationflags=NO_WINDOW, timeout=60)
                 if verified.returncode:
                     raise RuntimeError('공식 Ollama 디지털 서명을 검증하지 못해 실행을 중단했습니다.')
-                self.emit(self.install_status.set, '설치 마법사에서 설치를 완료하세요.')
-                result = subprocess.Popen([str(installer)]).wait()
+                if self.installer_cancel.is_set():
+                    raise DownloadCancelled()
+                launched = []
+                ready = threading.Event()
+                def launch():
+                    try:
+                        self.launch_installer(installer, launched)
+                    finally:
+                        ready.set()
+                self.emit(launch)
+                while not ready.wait(0.1):
+                    if self.closed:
+                        raise DownloadCancelled()
+                if not launched:
+                    raise DownloadCancelled()
+                if isinstance(launched[0], Exception):
+                    raise launched[0]
+                result = launched[0].wait()
                 if result != 0:
                     raise RuntimeError(f'설치가 취소되었거나 실패했습니다 (코드 {result}).')
                 if not find_ollama():
                     raise RuntimeError('설치 경로를 확인하지 못했습니다. 사용자 지정 설치라면 PATH에 Ollama를 추가하세요.')
+                self.emit(self.download_status.set, 'Ollama 설치 완료')
                 return 'Ollama 설치를 확인했습니다.'
+            except DownloadCancelled:
+                self.emit(self.download_status.set, '다운로드 중지됨 · 임시 파일 삭제 완료')
+                return 'Ollama 설치 파일 다운로드를 중지했습니다.'
+            except Exception:
+                self.emit(self.download_status.set, '설치 작업 실패 · 다시 시도할 수 있습니다.')
+                raise
             finally:
-                partial.unlink(missing_ok=True)
+                self.emit(self.installer_finished)
         self.job('installer', work, lambda text: (self.log(text), self.refresh()))
 
     def search(self):
@@ -496,6 +788,62 @@ class App(tk.Tk):
 
     def pick_tag(self, _=None):
         self.target.set(self.target.get().split(':')[0] + ':' + self.tags.get())
+
+    def selected_catalog_result(self):
+        selection = self.results.selection()
+        if not selection:
+            messagebox.showinfo('모델 선택', '검색 결과에서 모델을 먼저 선택하세요.')
+            return None
+        return self.results.item(selection[0], 'values')
+
+    def open_model_site(self, name=None):
+        if name is None:
+            result = self.selected_catalog_result()
+            if not result:
+                return
+            name = result[0]
+        webbrowser.open('https://ollama.com/library/' + quote(name, safe='/:'))
+
+    def show_model_details(self, _=None):
+        result = self.selected_catalog_result()
+        if not result:
+            return
+        name, description = result
+        window = tk.Toplevel(self)
+        window.title(name + ' · 전체 설명')
+        window.geometry('780x540')
+        window.minsize(520, 360)
+        frame = ttk.Frame(window, padding=16)
+        frame.pack(fill='both', expand=True)
+        ttk.Label(frame, text=name, font=('맑은 고딕', 16, 'bold')).pack(anchor='w')
+        ttk.Label(frame, text='검색 결과의 전체 설명입니다. 상세 문서는 공식 사이트에서 확인하세요.').pack(anchor='w', pady=8)
+        body = ScrolledText(frame, wrap='word', font=('맑은 고딕', 11), padx=12, pady=12)
+        body.pack(fill='both', expand=True)
+        body.insert('1.0', description or '설명이 없습니다.')
+        body.configure(state='disabled')
+        current = self.target.get()
+        target = tk.StringVar(window, value=current if current.split(':')[0] == name else name + ':latest')
+        row = ttk.Frame(frame)
+        row.pack(fill='x', pady=(12, 0))
+        ttk.Label(row, text='모델:태그').pack(side='left', padx=(0, 6))
+        ttk.Entry(row, textvariable=target).pack(side='left', fill='x', expand=True)
+        ttk.Button(row, text='콘솔에서 pull', command=lambda: self.pull_in_console(target.get())).pack(side='left', padx=6)
+        ttk.Button(row, text='공식 사이트', command=lambda: self.open_model_site(name)).pack(side='left')
+
+    def pull_in_console(self, name=None):
+        # Never send a new pull command to the stdin of an existing process.
+        if self.install_terminal_active or {'console', 'pull', 'chat', 'server', 'installer'} & self.busy:
+            messagebox.showinfo('작업 진행 중', '진행 중인 작업을 종료한 뒤 콘솔 pull을 실행하세요.')
+            return
+        try:
+            name = model_name(self.target.get() if name is None else name)
+        except ValueError as exc:
+            messagebox.showerror('모델 이름', str(exc))
+            return
+        self.notebook.select(self.console_tab)
+        self.command.set('ollama pull ' + shlex.quote(name))
+        self.console_execute()
+        self.command_entry.focus_set()
 
     def cancel_pull(self):
         if 'pull' in self.busy:
@@ -564,6 +912,8 @@ class App(tk.Tk):
             (DATA / 'settings.json').write_text(json.dumps({'model': self.selected.get()}, ensure_ascii=False), 'utf-8')
         except OSError as exc:
             self.log('설정 저장 실패: ' + str(exc))
+        if self.selected.get():
+            self.access_log('모델 선택', self.selected.get())
         self.clear_chat()
 
     def clear_chat(self):
@@ -591,6 +941,8 @@ class App(tk.Tk):
             messagebox.showinfo('모델 선택', '서버를 시작하고 설치된 모델을 선택하세요.')
             return 'break'
         messages = self.history + [{'role': 'user', 'content': text}]
+        started = time.monotonic()
+        self.access_log('AI 요청', f'model={model} · messages={len(messages)}\n질문: {text}')
         self.prompt.delete('1.0', 'end')
         self.append(self.transcript, '\n나: ' + text + '\n\n' + model + ': ')
         self.send_button.configure(state='disabled')
@@ -613,6 +965,9 @@ class App(tk.Tk):
             self.history = history if self.selected.get() == model else []
             self.append(self.transcript, '\n')
             self.send_button.configure(state='normal')
+            answer = history[-1].get('content', '') if history else ''
+            elapsed = time.monotonic() - started
+            self.access_log('AI 응답', f'model={model} · {elapsed:.2f}초 · {len(answer)}자\n답변: {answer}')
         self.job('chat', work, done)
         return 'break'
 
@@ -621,7 +976,12 @@ class App(tk.Tk):
         if active and not messagebox.askyesno('작업 진행 중', '진행 중인 작업의 연결이 끊어집니다. 앱을 닫을까요?\nOllama 서버와 실행 중인 설치 마법사는 유지됩니다.'):
             return
         self.cancel.set()
-        self.console_runner.stop()
+        self.installer_cancel.set()
+        try:
+            self.console_runner.stop()
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            messagebox.showerror('작업 중지 실패', str(exc), parent=self)
+            return
         self.closed = True
         self.destroy()
 

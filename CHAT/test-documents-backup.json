@@ -1,0 +1,8 @@
+{
+  "format": "ollama-say-documents",
+  "version": 1,
+  "documents": [
+    { "id": "restore-test-one", "title": "백업 검증 A", "text": "# 복원 문서 A\n\n**괄호(테스트)**" },
+    { "id": "restore-test-two", "title": "백업 검증 B", "text": "# 복원 문서 B\n\n$x^2$" }
+  ]
+}

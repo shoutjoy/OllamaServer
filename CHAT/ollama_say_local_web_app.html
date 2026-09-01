@@ -1,0 +1,2276 @@
+<!DOCTYPE html>
+<html lang="ko" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ollama Say - Markdown Studio & Local AI Chat</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Google Fonts & KaTeX CSS -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+  
+  <!-- KaTeX, Marked.js, & Mermaid.js -->
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+
+  <!-- React 18, ReactDOM, and Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    code, pre, .font-mono, textarea.editor-font {
+      font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #090d16;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #334155;
+    }
+    
+    /* Markdown Preview & AI Chat Rendering */
+    .prose-custom {
+      color: #e2e8f0;
+      line-height: 1.7;
+    }
+    .prose-custom h1 { font-size: 1.4rem; font-weight: 800; margin-top: 1.2rem; margin-bottom: 0.6rem; color: #f8fafc; border-bottom: 1px solid #334155; padding-bottom: 0.3rem; }
+    .prose-custom h2 { font-size: 1.2rem; font-weight: 700; margin-top: 1rem; margin-bottom: 0.5rem; color: #f1f5f9; border-bottom: 1px solid #1e293b; padding-bottom: 0.2rem; }
+    .prose-custom h3 { font-size: 1.05rem; font-weight: 600; margin-top: 0.8rem; margin-bottom: 0.4rem; color: #cbd5e1; }
+    .prose-custom p { margin-bottom: 0.75rem; }
+    .prose-custom ul { list-style-type: disc; padding-left: 1.25rem; margin-bottom: 0.75rem; }
+    .prose-custom ol { list-style-type: decimal; padding-left: 1.25rem; margin-bottom: 0.75rem; }
+    .prose-custom li { margin-bottom: 0.25rem; }
+    .prose-custom blockquote { border-left: 3px solid #6366f1; padding-left: 0.75rem; color: #94a3b8; margin: 0.75rem 0; font-style: italic; background: rgba(99, 102, 241, 0.05); border-radius: 0 4px 4px 0; }
+    .prose-custom code:not(pre code) { background: #1e293b; color: #38bdf8; padding: 0.15rem 0.35rem; border-radius: 0.25rem; font-size: 0.85em; }
+    .prose-custom pre { background: #070a12; border: 1px solid #1e293b; padding: 0.85rem; border-radius: 0.5rem; overflow-x: auto; margin-bottom: 0.75rem; }
+    .prose-custom pre code { color: #a5b4fc; font-size: 0.85em; }
+    .prose-custom strong { font-weight: 700; color: #ffffff; }
+    .prose-custom em { color: #cbd5e1; font-style: italic; }
+    .prose-custom table { width: 100%; border-collapse: collapse; margin-bottom: 0.75rem; font-size: 0.85rem; }
+    .prose-custom th, .prose-custom td { border: 1px solid #334155; padding: 0.4rem 0.6rem; text-align: left; }
+    .prose-custom th { background: #1e293b; color: #f8fafc; font-weight: 600; }
+    .prose-custom hr { border: none; border-top: 1px solid #334155; margin: 1rem 0; }
+    
+    /* Mermaid diagram container */
+    .mermaid-container {
+      background: #0b0f19;
+      border: 1px solid #334155;
+      border-radius: 0.5rem;
+      padding: 1rem;
+      margin: 0.75rem 0;
+      display: flex;
+      justify-content: center;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased overflow-hidden select-none">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useMemo } = React;
+    const FENCE = '```';
+
+    // Initialize Mermaid
+    if (window.mermaid) {
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'dark',
+        securityLevel: 'loose',
+        themeVariables: {
+          darkMode: true,
+          background: '#0b0f19',
+          primaryColor: '#6366f1',
+          primaryTextColor: '#f8fafc',
+          primaryBorderColor: '#818cf8',
+          lineColor: '#94a3b8',
+          secondaryColor: '#ec4899',
+          tertiaryColor: '#1e293b'
+        }
+      });
+    }
+
+    // === IndexedDB Database Utility for Markdown Editor ===
+    const DB_NAME = 'OllamaSayEditorDB_v2';
+    const DB_VERSION = 1;
+    const STORE_DOCS = 'documents';
+
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(STORE_DOCS)) {
+            db.createObjectStore(STORE_DOCS, { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function dbSaveDoc(doc) {
+      try {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_DOCS, 'readwrite');
+          const store = tx.objectStore(STORE_DOCS);
+          store.put(doc);
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => reject(tx.error);
+        });
+      } catch (e) {
+        console.error('IndexedDB save failed:', e);
+      }
+    }
+
+    async function dbSaveAllDocs(docsList) {
+      try {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_DOCS, 'readwrite');
+          const store = tx.objectStore(STORE_DOCS);
+          docsList.forEach(d => store.put(d));
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => reject(tx.error);
+        });
+      } catch (e) {
+        console.error('IndexedDB bulk save failed:', e);
+      }
+    }
+
+    async function dbGetAllDocs() {
+      try {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_DOCS, 'readonly');
+          const store = tx.objectStore(STORE_DOCS);
+          const req = store.getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+        });
+      } catch (e) {
+        console.error('IndexedDB get failed:', e);
+        return [];
+      }
+    }
+
+    async function dbDeleteDoc(id) {
+      try {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_DOCS, 'readwrite');
+          tx.objectStore(STORE_DOCS).delete(id);
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => reject(tx.error);
+        });
+      } catch (e) {
+        console.error('IndexedDB delete failed:', e);
+      }
+    }
+
+    // === Custom Markdown & KaTeX & Mermaid Parser ===
+    function renderMarkdownAndMath(text, elementIdPrefix = 'elem_') {
+      if (!text) return '';
+      let processed = text;
+
+      // 1. Math preprocessing (Display Math $$...$$ and Inline Math $...$)
+      const mathBlocks = [];
+      processed = processed.replace(/\$\$([\s\S]+?)\$\$/g, (match, formula) => {
+        try {
+          const rendered = katex.renderToString(formula, { displayMode: true, throwOnError: false });
+          mathBlocks.push(rendered);
+        } catch (e) {
+          mathBlocks.push('<div class="text-rose-400 font-mono text-xs">Math Error: ' + formula + '</div>');
+        }
+        return '%%%MATHBLOCK_' + (mathBlocks.length - 1) + '%%%';
+      });
+
+      processed = processed.replace(/\$([^\$\n]+?)\$/g, (match, formula) => {
+        try {
+          const rendered = katex.renderToString(formula, { displayMode: false, throwOnError: false });
+          mathBlocks.push(rendered);
+        } catch (e) {
+          mathBlocks.push('<span>$' + formula + '$</span>');
+        }
+        return '%%%MATHBLOCK_' + (mathBlocks.length - 1) + '%%%';
+      });
+
+      // 2. Extract and sanitize Mermaid code blocks before marked
+      const mermaidBlocks = [];
+      const mermaidRegex = new RegExp(FENCE + 'mermaid\\s*([\\s\\S]+?)' + FENCE, 'gi');
+      processed = processed.replace(mermaidRegex, (match, code) => {
+        const id = 'mermaid_' + elementIdPrefix + '_' + mermaidBlocks.length + '_' + Math.random().toString(36).substring(2, 7);
+        mermaidBlocks.push({ id, code: code.trim() });
+        return '<div class="mermaid-container"><div id="' + id + '" class="mermaid">' + code.trim() + '</div></div>';
+      });
+
+      // 3. Bold text regex enhancements: robust with brackets/parentheses
+      processed = processed.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+      processed = processed.replace(/__([^_]+?)__/g, '<strong>$1</strong>');
+
+      // 4. Marked.js parsing
+      if (window.marked) {
+        try {
+          window.marked.setOptions({
+            breaks: true,
+            gfm: true
+          });
+          processed = window.marked.parse(processed);
+        } catch (e) {
+          console.warn('Marked parse note:', e);
+        }
+      }
+
+      // 5. Restore KaTeX Math Blocks
+      processed = processed.replace(/%%%MATHBLOCK_(\d+)%%%/g, (match, id) => {
+        return mathBlocks[parseInt(id, 10)] || '';
+      });
+
+      return processed;
+    }
+
+    // Trigger Mermaid Render on container
+    function renderMermaidAsync(containerDom) {
+      if (!window.mermaid || !containerDom) return;
+      setTimeout(() => {
+        try {
+          const nodes = containerDom.querySelectorAll('.mermaid');
+          nodes.forEach((node) => {
+            if (!node.getAttribute('data-processed')) {
+              mermaid.init(undefined, node);
+            }
+          });
+        } catch (e) {
+          console.warn('Mermaid render error:', e);
+        }
+      }, 50);
+    }
+
+    // Default System Prompts
+    const DEFAULT_PROMPTS = {
+      instant: '당신은 신속하고 정확하게 핵심을 짚어 답변하는 AI 어시스턴트 "Ollama Say"입니다. 질문에 대해 군더더기 없이 친절하고 명쾌하게 한국어로 답변하세요.',
+      reasoning: '당신은 심층 분석과 정밀한 추론을 수행하는 AI 분석가입니다.\n답변 시 실시간 사고 과정을 <think> 사고 과정... </think> 태그에 작성한 후 다음 구조로 명쾌하게 정리하세요:\n1. [핵심 요약 및 결론]\n2. [단계별 심층 추론 및 원리 분석 (Step-by-Step)]\n3. [고려해야 할 변수, 한계점 및 대안]\n4. [최종 권고사항]',
+      search: '당신은 웹 검색 결과를 면밀히 대조하여 최신 정보를 종합 브리핑하는 검색 전문가입니다. 제공된 검색 결과 컨텍스트를 바탕으로 사실에 기반하여 신뢰도 높은 답변을 작성하고 참고할 수 있도록 주요 팩트를 정리하세요.',
+      academic: '당신은 세계적인 연구 논문과 초록을 비판적으로 종합하는 학술 연구 전문가입니다.\n제공된 논문 메타데이터 및 초록(Abstract)들을 바탕으로 다음 3가지 핵심 섹션으로 나누어 전문성 있게 학술 브리핑을 작성하세요:\n\n### 1. 🌐 연구 동향 및 전체 종합 정리\n- 검색된 연구들이 다루는 핵심 문제의식과 전반적인 결론을 종합 서술.\n\n### 2. 🤝 지지 및 일치하는 연구 주장 (연구자, 연도 인용 필수)\n- 공통되거나 상호 보완적인 입장을 취하는 연구들을 [저자 성(Lastname) et al., 연도] 형식으로 명시하여 어떤 메커니즘/실험으로 주장을 뒷받침하는지 인용 분석.\n\n### 3. ⚖️ 반대 견해, 상충되는 주장 및 연구의 한계 (연구자, 연도 인용 필수)\n- 기존 연구와 상반되거나, 다른 방법론/조건에서 상이한 결과를 낸 연구, 혹은 남겨진 과제와 비판점을 [저자 성(Lastname) et al., 연도] 형식으로 비교 대조.'
+    };
+
+    const MODES = {
+      INSTANT: { id: 'instant', name: '즉시', icon: '⚡', color: 'text-amber-400 bg-amber-500/10 border-amber-500/30' },
+      REASONING: { id: 'reasoning', name: '추론', icon: '🧠', color: 'text-purple-400 bg-purple-500/10 border-purple-500/30' },
+      SEARCH: { id: 'search', name: '검색', icon: '🌐', color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' },
+      ACADEMIC: { id: 'academic', name: '학술검색', icon: '📚', color: 'text-blue-400 bg-blue-500/10 border-blue-500/30' }
+    };
+
+    async function fetchAcademicPapers(query) {
+      const papers = [];
+      const cleanQuery = encodeURIComponent(query.trim());
+
+      try {
+        const openAlexRes = await fetch('https://api.openalex.org/works?search=' + cleanQuery + '&per_page=4&sort=relevance_score:desc', {
+          headers: { 'Accept': 'application/json' }
+        });
+        if (openAlexRes.ok) {
+          const data = await openAlexRes.json();
+          (data.results || []).forEach(work => {
+            let abstract = '초록 정보 없음';
+            if (work.abstract_inverted_index) {
+              const words = [];
+              Object.entries(work.abstract_inverted_index).forEach(([word, positions]) => {
+                positions.forEach(pos => { words[pos] = word; });
+              });
+              abstract = words.filter(Boolean).join(' ');
+            }
+            
+            const authors = (work.authorships || []).map(a => a.author?.display_name).filter(Boolean);
+            const firstAuthor = authors[0] || 'Unknown';
+            const year = work.publication_year || 'N/A';
+            const authorCitation = authors.length > 1 ? firstAuthor + ' et al.' : firstAuthor;
+
+            papers.push({
+              source: 'OpenAlex / arXiv',
+              title: work.title || 'Untitled Paper',
+              authors: authors.slice(0, 4).join(', ') + (authors.length > 4 ? ' 외' : ''),
+              citationKey: authorCitation + ', ' + year,
+              year: year,
+              journal: work.primary_location?.source?.display_name || 'Academic Venue',
+              doi: work.doi || (work.ids?.doi ? 'https://doi.org/' + work.ids.doi : null),
+              url: work.doi || work.id || ('https://scholar.google.com/scholar?q=' + cleanQuery),
+              abstract: abstract.length > 400 ? abstract.slice(0, 400) + '...' : abstract,
+              fullAbstract: abstract,
+              citedCount: work.cited_by_count || 0
+            });
+          });
+        }
+      } catch (err) {
+        console.warn('OpenAlex fetch note:', err);
+      }
+
+      if (papers.length < 3) {
+        try {
+          const crossrefRes = await fetch('https://api.crossref.org/works?query=' + cleanQuery + '&rows=3', {
+            headers: { 'Accept': 'application/json' }
+          });
+          if (crossrefRes.ok) {
+            const data = await crossrefRes.json();
+            (data.message?.items || []).forEach(item => {
+              const authors = (item.author || []).map(a => ((a.family || '') + ' ' + (a.given || '')).trim()).filter(Boolean);
+              const firstAuthor = item.author?.[0]?.family || 'Unknown';
+              const year = item.created?.['date-parts']?.[0]?.[0] || item.issued?.['date-parts']?.[0]?.[0] || 'N/A';
+              const title = item.title?.[0] || 'Untitled Work';
+              const cleanAbstract = item.abstract ? item.abstract.replace(/<[^>]*>?/gm, '') : '초록 미제공 (Crossref 메타데이터 인용)';
+
+              if (!papers.some(p => p.title.toLowerCase() === title.toLowerCase())) {
+                papers.push({
+                  source: 'Crossref',
+                  title: title,
+                  authors: authors.slice(0, 3).join(', ') + (authors.length > 3 ? ' 외' : ''),
+                  citationKey: firstAuthor + ' et al., ' + year,
+                  year: year,
+                  journal: item['container-title']?.[0] || 'Crossref Indexed Journal',
+                  doi: item.DOI ? ('https://doi.org/' + item.DOI) : null,
+                  url: item.URL || (item.DOI ? ('https://doi.org/' + item.DOI) : '#'),
+                  abstract: cleanAbstract.length > 350 ? cleanAbstract.slice(0, 350) + '...' : cleanAbstract,
+                  fullAbstract: cleanAbstract,
+                  citedCount: item['is-referenced-by-count'] || 0
+                });
+              }
+            });
+          }
+        } catch (err) {
+          console.warn('Crossref fetch note:', err);
+        }
+      }
+
+      return papers.slice(0, 5);
+    }
+
+    async function fetchWebKnowledge(query) {
+      const results = [];
+      const cleanQuery = encodeURIComponent(query.trim());
+      try {
+        const wikiRes = await fetch('https://ko.wikipedia.org/w/api.php?action=query&list=search&srsearch=' + cleanQuery + '&utf8=&format=json&origin=*');
+        if (wikiRes.ok) {
+          const data = await wikiRes.json();
+          (data.query?.search || []).slice(0, 3).forEach(item => {
+            results.push({
+              title: item.title,
+              snippet: item.snippet.replace(/<[^>]*>?/gm, ''),
+              url: 'https://ko.wikipedia.org/wiki/' + encodeURIComponent(item.title),
+              source: 'Wikipedia'
+            });
+          });
+        }
+      } catch (err) {}
+
+      if (results.length === 0) {
+        results.push({
+          title: '"' + query + '" 웹 검색 인덱스',
+          snippet: 'DuckDuckGo 및 오픈 웹 지식 베이스에서 수집된 관련 토픽 인덱스입니다.',
+          url: 'https://duckduckgo.com/?q=' + cleanQuery,
+          source: 'DuckDuckGo Web'
+        });
+      }
+      return results;
+    }
+
+    // GitHub Push API Handler
+    async function pushToGitHub({ token, repo, branch = 'main', filePath, content, commitMessage }) {
+      if (!token || !repo || !filePath) {
+        throw new Error('깃허브 토큰, 저장소(owner/repo), 파일명을 모두 설정해주세요.');
+      }
+      const [owner, repoName] = repo.split('/');
+      if (!owner || !repoName) {
+        throw new Error('저장소 형식은 "owner/repo" 형태여야 합니다 (예: octocat/my-notes).');
+      }
+
+      const cleanPath = filePath.replace(/^\/+/, '');
+      const apiUrl = 'https://api.github.com/repos/' + owner + '/' + repoName + '/contents/' + cleanPath;
+      const headers = {
+        'Authorization': 'token ' + token,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      };
+
+      // 1. Check if file already exists to get its SHA
+      let sha = null;
+      try {
+        const checkRes = await fetch(apiUrl + '?ref=' + branch, { headers });
+        if (checkRes.ok) {
+          const checkData = await checkRes.json();
+          sha = checkData.sha;
+        }
+      } catch (e) {
+        // file doesn't exist yet, which is fine
+      }
+
+      // 2. Base64 encode content (Unicode safe)
+      const encodedContent = btoa(unescape(encodeURIComponent(content)));
+
+      // 3. Put File
+      const bodyPayload = {
+        message: commitMessage || ('Update ' + cleanPath + ' via Ollama Say Studio'),
+        content: encodedContent,
+        branch: branch
+      };
+      if (sha) {
+        bodyPayload.sha = sha;
+      }
+
+      const putRes = await fetch(apiUrl, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(bodyPayload)
+      });
+
+      if (!putRes.ok) {
+        const errData = await putRes.json().catch(() => ({}));
+        throw new Error(errData.message || ('HTTP ' + putRes.status + ' Push Failed'));
+      }
+
+      return await putRes.json();
+    }
+
+    function App() {
+      // Editor Document States
+      const [isEditorOpen, setIsEditorOpen] = useState(true);
+      const [isDocListOpen, setIsDocListOpen] = useState(true);
+      const [docSearchQuery, setDocSearchQuery] = useState('');
+      const [editorDocs, setEditorDocs] = useState([]);
+      const [currentDocId, setCurrentDocId] = useState('doc_1');
+      const [editorContent, setEditorContent] = useState('# Ollama Say 통합 연구 스튜디오\n\n좌측 툴바를 이용해 **H1~H3, Bold, 기울기, 목록, 코드, Mermaid 다이어그램, KaTeX 수식, 표**를 자유롭게 삽입하세요.\n\n### 📐 수식 예시\n$$E = mc^2$$\n인라인 수식: $f(x) = \\int_{-\\infty}^\\infty e^{-x^2} dx$\n\n### 📊 Mermaid 다이어그램 예시\n```mermaid\ngraph TD\n    A[사용자 질문] --> B{Ollama LLM}\n    B -->|추론 과정| C[Think 스트리밍]\n    B -->|학술 논문| D[OpenAlex/Crossref]\n    C --> E[마크다운 에디터 & GitHub]\n    D --> E\n```\n\n### 📝 표 예시\n| 기능 | 상태 | 연동 |\n| :--- | :---: | :--- |\n| IndexedDB 다중 문서 | 지원 | 자동 저장 |\n| GitHub Commit & Push | 지원 | REST API |\n| Mermaid & KaTeX | 지원 | 실시간 렌더링 |');
+      const [docTitle, setDocTitle] = useState('새 연구 노트');
+      const [editorViewMode, setEditorViewMode] = useState('split');
+      const editorTextareaRef = useRef(null);
+      const previewContainerRef = useRef(null);
+      const fileInputRef = useRef(null);
+      const bulkImportInputRef = useRef(null);
+
+      // GitHub Integration Settings (persisted in localStorage)
+      const [githubToken, setGithubToken] = useState(() => localStorage.getItem('ollama_gh_token') || '');
+      const [githubRepo, setGithubRepo] = useState(() => localStorage.getItem('ollama_gh_repo') || '');
+      const [githubBranch, setGithubBranch] = useState(() => localStorage.getItem('ollama_gh_branch') || 'main');
+      const [githubPathPrefix, setGithubPathPrefix] = useState(() => localStorage.getItem('ollama_gh_path') || 'notes/');
+      const [isPushingGithub, setIsPushingGithub] = useState(false);
+      const [githubCommitMsg, setGithubCommitMsg] = useState('');
+      const [isPushModalOpen, setIsPushModalOpen] = useState(false);
+
+      // Server & Model States
+      const [endpointType, setEndpointType] = useState('local');
+      const [localUrl, setLocalUrl] = useState('http://127.0.0.1:11434');
+      const [onlineUrl, setOnlineUrl] = useState('');
+      const [activeUrl, setActiveUrl] = useState('http://127.0.0.1:11434');
+      
+      const [modelListDetailed, setModelListDetailed] = useState([]);
+      const [selectedModel, setSelectedModel] = useState('');
+      const [customModelInput, setCustomModelInput] = useState('llama3');
+      const [isLoadingModels, setIsLoadingModels] = useState(false);
+      const [connectionStatus, setConnectionStatus] = useState('idle');
+      const [isDemoMode, setIsDemoMode] = useState(false);
+
+      // System Prompts & Parameters
+      const [customPrompts, setCustomPrompts] = useState(DEFAULT_PROMPTS);
+      const [temperature, setTemperature] = useState(0.7);
+
+      // Chat States
+      const [activeMode, setActiveMode] = useState('instant');
+      const [showReasoningStream, setShowReasoningStream] = useState(true); // 추론 실시간 보기 토글
+      const [liveReasoningText, setLiveReasoningText] = useState('');
+      const [sessions, setSessions] = useState([
+        { id: '1', title: '새 대화', messages: [], createdAt: new Date().toISOString() }
+      ]);
+      const [currentSessionId, setCurrentSessionId] = useState('1');
+      const [inputText, setInputText] = useState('');
+      const [isGenerating, setIsGenerating] = useState(false);
+      const [searchStatus, setSearchStatus] = useState(null);
+      const [notification, setNotification] = useState(null);
+
+      // UI Views
+      const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+      const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+      const [chatSourceViewMap, setChatSourceViewMap] = useState({}); // { [msgIndex]: boolean }
+
+      const messagesEndRef = useRef(null);
+      const abortControllerRef = useRef(null);
+
+      const showToast = (msg, type = 'info') => {
+        setNotification({ msg, type });
+        setTimeout(() => setNotification(null), 3500);
+      };
+
+      useEffect(() => {
+        async function loadDocs() {
+          const docs = await dbGetAllDocs();
+          if (docs && docs.length > 0) {
+            setEditorDocs(docs);
+            const first = docs[0];
+            setCurrentDocId(first.id);
+            setDocTitle(first.title);
+            setEditorContent(first.content);
+          } else {
+            const initialDoc = {
+              id: 'doc_1',
+              title: '통합 연구 노트',
+              content: editorContent,
+              updatedAt: new Date().toISOString()
+            };
+            await dbSaveDoc(initialDoc);
+            setEditorDocs([initialDoc]);
+          }
+        }
+        loadDocs();
+      }, []);
+
+      // Auto save current active document
+      useEffect(() => {
+        if (!currentDocId) return;
+        const timer = setTimeout(async () => {
+          const updatedDoc = {
+            id: currentDocId,
+            title: docTitle || '제목 없는 문서',
+            content: editorContent,
+            updatedAt: new Date().toISOString()
+          };
+          await dbSaveDoc(updatedDoc);
+          setEditorDocs(prev => prev.map(d => d.id === currentDocId ? updatedDoc : d));
+        }, 400);
+        return () => clearTimeout(timer);
+      }, [editorContent, docTitle, currentDocId]);
+
+      // Re-render Mermaid in Preview & Chat
+      useEffect(() => {
+        if (previewContainerRef.current) {
+          renderMermaidAsync(previewContainerRef.current);
+        }
+      }, [editorContent, editorViewMode]);
+
+      // Fetch Ollama models
+      const fetchOllamaModels = async (targetUrl) => {
+        if (!targetUrl || isDemoMode) return;
+        setIsLoadingModels(true);
+        setConnectionStatus('idle');
+
+        try {
+          const sanitized = targetUrl.replace(/\/+$/, '');
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+          const res = await fetch(sanitized + '/api/tags', {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const data = await res.json();
+          const list = data.models || [];
+          
+          setModelListDetailed(list);
+          setConnectionStatus('connected');
+          if (list.length > 0) {
+            if (!selectedModel || !list.some(m => m.name === selectedModel)) {
+              setSelectedModel(list[0].name);
+            }
+          }
+          showToast('Ollama 모델 ' + list.length + '개를 정상 로드했습니다.', 'success');
+        } catch (err) {
+          setConnectionStatus('error');
+          setModelListDetailed([]);
+        } finally {
+          setIsLoadingModels(false);
+        }
+      };
+
+      useEffect(() => {
+        if (isDemoMode) {
+          setConnectionStatus('demo');
+          setModelListDetailed([
+            { name: 'llama3.3:70b', size: 42612246760, details: { parameter_size: '70B', quantization_level: 'Q4_K_M' } },
+            { name: 'deepseek-r1:14b', size: 9683075635, details: { parameter_size: '14B', quantization_level: 'Q4_K_M' } },
+            { name: 'qwen2.5:14b', size: 9434220032, details: { parameter_size: '14B', quantization_level: 'Q4_K_M' } },
+            { name: 'mistral-nemo:12b', size: 7109865159, details: { parameter_size: '12.2B', quantization_level: 'Q4_0' } }
+          ]);
+          setSelectedModel('deepseek-r1:14b');
+          return;
+        }
+
+        const url = endpointType === 'local' ? localUrl : onlineUrl;
+        setActiveUrl(url);
+        if (url) {
+          fetchOllamaModels(url);
+        }
+      }, [endpointType, localUrl, onlineUrl, isDemoMode]);
+
+      const insertFormatting = (type) => {
+        const textarea = editorTextareaRef.current;
+        if (!textarea) return;
+
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const selected = editorContent.substring(start, end);
+        let replacement = '';
+        let cursorOffset = 0;
+
+        switch (type) {
+          case 'h1':
+            replacement = '# ' + (selected || '대제목');
+            cursorOffset = 2;
+            break;
+          case 'h2':
+            replacement = '## ' + (selected || '중제목');
+            cursorOffset = 3;
+            break;
+          case 'h3':
+            replacement = '### ' + (selected || '소제목');
+            cursorOffset = 4;
+            break;
+          case 'bold':
+            replacement = '**' + (selected || '강조 텍스트') + '**';
+            cursorOffset = 2;
+            break;
+          case 'italic':
+            replacement = '*' + (selected || '기울임 텍스트') + '*';
+            cursorOffset = 1;
+            break;
+          case 'bullet':
+            replacement = '\n- ' + (selected || '항목 내용');
+            break;
+          case 'number':
+            replacement = '\n1. ' + (selected || '숫자 항목');
+            break;
+          case 'code':
+            if (selected.includes('\n') || selected.length > 30) {
+              replacement = '\n' + FENCE + 'javascript\n' + (selected || '// 코드를 작성하세요\nconsole.log("Hello Ollama Say!");') + '\n' + FENCE + '\n';
+            } else {
+              replacement = '`' + (selected || 'code') + '`';
+            }
+            break;
+          case 'mermaid':
+            replacement = '\n' + FENCE + 'mermaid\ngraph TD\n    A[시작] --> B[프로세스 실행]\n    B --> C{결과 검증}\n    C -->|성공| D[완료]\n    C -->|실패| B\n' + FENCE + '\n';
+            break;
+          case 'math':
+            replacement = '\n$$\n\\sum_{i=1}^{n} X_i = \\int_{a}^{b} f(x)dx\n$$\n';
+            break;
+          case 'table':
+            replacement = '\n| 항목 | 설명 | 상태 |\n| :--- | :--- | :---: |\n| 데이터1 | 내용 상세 | ✅ |\n| 데이터2 | 내용 상세 | ⚡ |\n\n';
+            break;
+          default:
+            return;
+        }
+
+        const newContent = editorContent.substring(0, start) + replacement + editorContent.substring(end);
+        setEditorContent(newContent);
+
+        setTimeout(() => {
+          textarea.focus();
+          textarea.setSelectionRange(start + cursorOffset, start + replacement.length);
+        }, 40);
+      };
+
+      const handleInsertAtCursor = (textToInsert) => {
+        const textarea = editorTextareaRef.current;
+        if (!textarea) {
+          setEditorContent(prev => prev + '\n\n' + textToInsert);
+          showToast('에디터 끝에 삽입되었습니다.', 'success');
+          return;
+        }
+
+        const startPos = textarea.selectionStart;
+        const endPos = textarea.selectionEnd;
+        const before = editorContent.substring(0, startPos);
+        const after = editorContent.substring(endPos);
+
+        const newContent = before + '\n\n' + textToInsert + '\n\n' + after;
+        setEditorContent(newContent);
+        showToast('에디터 커서 위치에 AI 답변을 삽입했습니다!', 'success');
+
+        setTimeout(() => {
+          textarea.focus();
+          const newCursor = startPos + textToInsert.length + 4;
+          textarea.setSelectionRange(newCursor, newCursor);
+        }, 50);
+      };
+
+      const handleCreateNewDoc = async () => {
+        const newId = 'doc_' + Date.now();
+        const newDoc = {
+          id: newId,
+          title: '새 문서 ' + (editorDocs.length + 1),
+          content: '# 새 문서\n\n내용을 작성하세요.',
+          updatedAt: new Date().toISOString()
+        };
+        await dbSaveDoc(newDoc);
+        setEditorDocs([newDoc, ...editorDocs]);
+        setCurrentDocId(newId);
+        setDocTitle(newDoc.title);
+        setEditorContent(newDoc.content);
+        showToast('새 문서가 생성되었습니다.', 'info');
+      };
+
+      const handleSelectDoc = (doc) => {
+        setCurrentDocId(doc.id);
+        setDocTitle(doc.title);
+        setEditorContent(doc.content);
+      };
+
+      const handleDeleteDoc = async (id, e) => {
+        e.stopPropagation();
+        if (editorDocs.length === 1) {
+          showToast('최소 1개의 문서는 유지되어야 합니다.', 'warning');
+          return;
+        }
+        await dbDeleteDoc(id);
+        const filtered = editorDocs.filter(d => d.id !== id);
+        setEditorDocs(filtered);
+        if (currentDocId === id) {
+          handleSelectDoc(filtered[0]);
+        }
+        showToast('문서가 삭제되었습니다.', 'info');
+      };
+
+      // Full bulk backup (JSON Bundle)
+      const handleBulkExportAllDocs = () => {
+        const backupData = {
+          app: 'Ollama Say Studio',
+          version: '2.0',
+          exportedAt: new Date().toISOString(),
+          documents: editorDocs
+        };
+        const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'ollama_say_all_docs_' + new Date().toISOString().slice(0, 10) + '.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('전체 문서(' + editorDocs.length + '개)를 JSON 백업 파일로 내보냈습니다.', 'success');
+      };
+
+      // Full bulk import
+      const handleBulkImportDocs = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          try {
+            const parsed = JSON.parse(event.target?.result);
+            if (Array.isArray(parsed.documents)) {
+              await dbSaveAllDocs(parsed.documents);
+              setEditorDocs(parsed.documents);
+              if (parsed.documents.length > 0) {
+                handleSelectDoc(parsed.documents[0]);
+              }
+              showToast('전체 문서 ' + parsed.documents.length + '개를 복원했습니다!', 'success');
+            } else {
+              showToast('유효한 백업 JSON 형식이 아닙니다.', 'error');
+            }
+          } catch (err) {
+            showToast('파일 읽기 오류: 올바른 JSON이 아닙니다.', 'error');
+          }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+      };
+
+      const handleExportSingleMarkdown = () => {
+        const blob = new Blob([editorContent], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const sanitizedName = (docTitle || 'document').replace(/[^a-zA-Z0-9가-힣_-]/g, '_');
+        a.download = sanitizedName + '.md';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('.md 파일로 내보냈습니다.', 'success');
+      };
+
+      const handleImportSingleFile = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          const content = event.target?.result;
+          const fileName = file.name.replace(/\.[^/.]+$/, "");
+          const newId = 'doc_' + Date.now();
+          const newDoc = {
+            id: newId,
+            title: fileName,
+            content: content,
+            updatedAt: new Date().toISOString()
+          };
+          await dbSaveDoc(newDoc);
+          setEditorDocs([newDoc, ...editorDocs]);
+          setCurrentDocId(newId);
+          setDocTitle(fileName);
+          setEditorContent(content);
+          showToast(file.name + ' 문서를 불러왔습니다!', 'success');
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+      };
+
+      const handlePushToGitHub = async () => {
+        if (!githubToken.trim() || !githubRepo.trim()) {
+          showToast('설정에서 깃허브 토큰과 저장소를 먼저 등록해주세요.', 'warning');
+          setIsSettingsOpen(true);
+          return;
+        }
+
+        setIsPushingGithub(true);
+        try {
+          const sanitizedTitle = (docTitle || 'note').replace(/[^a-zA-Z0-9가-힣_-]/g, '_');
+          const targetPath = (githubPathPrefix || 'notes/').replace(/^\/+/, '') + sanitizedTitle + '.md';
+
+          const commitMsg = githubCommitMsg.trim() || ('Docs: Update ' + sanitizedTitle + '.md via Ollama Say');
+          await pushToGitHub({
+            token: githubToken.trim(),
+            repo: githubRepo.trim(),
+            branch: githubBranch.trim() || 'main',
+            filePath: targetPath,
+            content: editorContent,
+            commitMessage: commitMsg
+          });
+
+          showToast('GitHub에 성공적으로 푸시되었습니다! (' + targetPath + ')', 'success');
+          setIsPushModalOpen(false);
+          setGithubCommitMsg('');
+        } catch (err) {
+          showToast('GitHub 푸시 실패: ' + err.message, 'error');
+        } finally {
+          setIsPushingGithub(false);
+        }
+      };
+
+      // Save GitHub Settings
+      const saveGitHubSettings = () => {
+        localStorage.setItem('ollama_gh_token', githubToken);
+        localStorage.setItem('ollama_gh_repo', githubRepo);
+        localStorage.setItem('ollama_gh_branch', githubBranch);
+        localStorage.setItem('ollama_gh_path', githubPathPrefix);
+        showToast('깃허브 설정이 저장되었습니다.', 'success');
+      };
+
+      const copyRawMarkdown = (text) => {
+        try {
+          const textArea = document.createElement("textarea");
+          textArea.value = text;
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textArea);
+          showToast('답변 원본 MD가 복사되었습니다.', 'success');
+        } catch (e) {
+          showToast('복사에 실패했습니다.', 'error');
+        }
+      };
+
+      const copyRenderedHtml = (text) => {
+        try {
+          const renderedHtml = renderMarkdownAndMath(text);
+          const blobHtml = new Blob([renderedHtml], { type: 'text/html' });
+          const blobText = new Blob([text], { type: 'text/plain' });
+          
+          if (navigator.clipboard && window.ClipboardItem) {
+            const data = [new ClipboardItem({ 'text/html': blobHtml, 'text/plain': blobText })];
+            navigator.clipboard.write(data).then(() => {
+              showToast('서식 있는 렌더링 결과가 복사되었습니다!', 'success');
+            }).catch(() => {
+              copyRawMarkdown(text);
+            });
+          } else {
+            copyRawMarkdown(text);
+          }
+        } catch (e) {
+          copyRawMarkdown(text);
+        }
+      };
+
+      const openInNewWindow = (text, title = 'Ollama Say 상세 뷰어') => {
+        const popup = window.open('', '_blank', 'width=950,height=800,scrollbars=yes,resizable=yes');
+        if (!popup) {
+          showToast('팝업 차단을 해제해주세요.', 'error');
+          return;
+        }
+
+        const renderedHtml = renderMarkdownAndMath(text, 'popup');
+        const escapedMd = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        const popupHtml = '<!DOCTYPE html>' +
+          '<html lang="ko" class="dark">' +
+          '<head>' +
+          '  <meta charset="UTF-8">' +
+          '  <title>' + title + '</title>' +
+          '  <script src="https://cdn.tailwindcss.com"><\/script>' +
+          '  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">' +
+          '  <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"><\/script>' +
+          '  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">' +
+          '  <style>' +
+          '    body { font-family: "Inter", sans-serif; background: #070a12; color: #f1f5f9; }' +
+          '    .font-mono { font-family: "JetBrains Mono", monospace; }' +
+          '    .prose-content { line-height: 1.75; }' +
+          '    .prose-content h1 { font-size: 1.5rem; font-weight: bold; margin: 1.2rem 0 0.6rem; border-bottom: 1px solid #334155; padding-bottom: 0.4rem; }' +
+          '    .prose-content h2 { font-size: 1.3rem; font-weight: bold; margin: 1rem 0 0.5rem; color: #cbd5e1; }' +
+          '    .prose-content h3 { font-size: 1.15rem; font-weight: 600; margin: 0.8rem 0 0.4rem; color: #94a3b8; }' +
+          '    .prose-content p { margin-bottom: 0.8rem; }' +
+          '    .prose-content ul { list-style: disc; padding-left: 1.5rem; margin-bottom: 0.8rem; }' +
+          '    .prose-content ol { list-style: decimal; padding-left: 1.5rem; margin-bottom: 0.8rem; }' +
+          '    .prose-content blockquote { border-left: 3px solid #6366f1; padding-left: 0.8rem; color: #94a3b8; margin: 0.8rem 0; background: rgba(99, 102, 241, 0.05); }' +
+          '    .prose-content code:not(pre code) { background: #1e293b; color: #38bdf8; padding: 0.15rem 0.35rem; border-radius: 4px; font-family: "JetBrains Mono", monospace; font-size: 0.9em; }' +
+          '    .prose-content pre { background: #020617; border: 1px solid #1e293b; padding: 1rem; border-radius: 8px; overflow-x: auto; margin-bottom: 0.8rem; font-family: "JetBrains Mono", monospace; }' +
+          '    .prose-content strong { color: #ffffff; font-weight: 700; }' +
+          '    .mermaid-container { background: #0b0f19; border: 1px solid #334155; border-radius: 0.5rem; padding: 1rem; margin: 0.75rem 0; display: flex; justify-content: center; }' +
+          '  </style>' +
+          '</head>' +
+          '<body class="p-6">' +
+          '  <div class="max-w-4xl mx-auto">' +
+          '    <div class="flex items-center justify-between pb-4 mb-6 border-b border-slate-800 bg-slate-900/90 p-3 rounded-xl sticky top-2 backdrop-blur-md z-20">' +
+          '      <div class="flex items-center gap-2">' +
+          '        <span class="font-bold text-sm text-indigo-400">⚡ Ollama Say 통합 뷰어</span>' +
+          '      </div>' +
+          '      <div class="flex items-center gap-3">' +
+          '        <div class="flex bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">' +
+          '          <button id="btn-pv" class="px-3 py-1 rounded bg-indigo-600 text-white font-semibold">미리보기 (PV)</button>' +
+          '          <button id="btn-md" class="px-3 py-1 rounded text-slate-400 hover:text-white">MD 원문</button>' +
+          '        </div>' +
+          '        <div class="flex items-center gap-1 bg-slate-950 px-2 py-1 rounded-lg border border-slate-800 text-xs">' +
+          '          <button id="btn-zoom-out" class="px-2 py-0.5 hover:bg-slate-800 rounded font-bold text-slate-300" title="축소">-</button>' +
+          '          <span id="zoom-val" class="font-mono text-slate-400 px-1">100%</span>' +
+          '          <button id="btn-zoom-in" class="px-2 py-0.5 hover:bg-slate-800 rounded font-bold text-slate-300" title="확대">+</button>' +
+          '          <button id="btn-zoom-reset" class="px-1.5 py-0.5 hover:bg-slate-800 rounded text-[10px] text-slate-500">100%</button>' +
+          '        </div>' +
+          '      </div>' +
+          '    </div>' +
+          '    <div id="content-container" style="font-size: 15px;">' +
+          '      <div id="view-pv" class="prose-content">' + renderedHtml + '</div>' +
+          '      <pre id="view-md" class="hidden p-4 rounded-xl bg-slate-950 border border-slate-800 font-mono text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">' + escapedMd + '</pre>' +
+          '    </div>' +
+          '  </div>' +
+          '  <script>' +
+          '    mermaid.initialize({ startOnLoad: true, theme: "dark" });' +
+          '    let zoom = 100;' +
+          '    const container = document.getElementById("content-container");' +
+          '    const zoomVal = document.getElementById("zoom-val");' +
+          '    const viewPv = document.getElementById("view-pv");' +
+          '    const viewMd = document.getElementById("view-md");' +
+          '    const btnPv = document.getElementById("btn-pv");' +
+          '    const btnMd = document.getElementById("btn-md");' +
+          '    function updateZoom() {' +
+          '      container.style.fontSize = (15 * (zoom / 100)) + "px";' +
+          '      zoomVal.innerText = zoom + "%";' +
+          '    }' +
+          '    document.getElementById("btn-zoom-in").onclick = () => { if (zoom < 200) { zoom += 10; updateZoom(); } };' +
+          '    document.getElementById("btn-zoom-out").onclick = () => { if (zoom > 60) { zoom -= 10; updateZoom(); } };' +
+          '    document.getElementById("btn-zoom-reset").onclick = () => { zoom = 100; updateZoom(); };' +
+          '    btnPv.onclick = () => {' +
+          '      viewPv.classList.remove("hidden");' +
+          '      viewMd.classList.add("hidden");' +
+          '      btnPv.className = "px-3 py-1 rounded bg-indigo-600 text-white font-semibold";' +
+          '      btnMd.className = "px-3 py-1 rounded text-slate-400 hover:text-white";' +
+          '    };' +
+          '    btnMd.onclick = () => {' +
+          '      viewMd.classList.remove("hidden");' +
+          '      viewPv.classList.add("hidden");' +
+          '      btnMd.className = "px-3 py-1 rounded bg-indigo-600 text-white font-semibold";' +
+          '      btnPv.className = "px-3 py-1 rounded text-slate-400 hover:text-white";' +
+          '    };' +
+          '  <\/script>' +
+          '</body>' +
+          '</html>';
+
+        popup.document.write(popupHtml);
+        popup.document.close();
+      };
+
+      const handleDownloadSelf = () => {
+        try {
+          const htmlContent = "<!DOCTYPE html>\n" + document.documentElement.outerHTML;
+          const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'ollama-say-studio.html';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          showToast('ollama-say-studio.html 파일이 다운로드되었습니다!', 'success');
+        } catch (e) {
+          showToast('다운로드 중 오류가 발생했습니다.', 'error');
+        }
+      };
+
+      const currentSession = sessions.find(s => s.id === currentSessionId) || sessions[0];
+
+      useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        // Re-render Mermaid diagrams in chat messages
+        const chatDom = document.getElementById('chat-messages-container');
+        if (chatDom) {
+          renderMermaidAsync(chatDom);
+        }
+      }, [currentSession?.messages, isGenerating, searchStatus]);
+
+      const handleSendMessage = async (e) => {
+        if (e) e.preventDefault();
+        if (!inputText.trim() || isGenerating) return;
+
+        const userPrompt = inputText.trim();
+        setInputText('');
+        setLiveReasoningText('');
+
+        const targetModel = selectedModel || customModelInput.trim() || 'llama3';
+        const userMsg = {
+          role: 'user',
+          content: userPrompt,
+          mode: activeMode,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+
+        let updatedSessions = [...sessions];
+        const sIndex = updatedSessions.findIndex(s => s.id === currentSessionId);
+        if (sIndex !== -1 && updatedSessions[sIndex].messages.length === 0) {
+          updatedSessions[sIndex].title = userPrompt.slice(0, 20) + (userPrompt.length > 20 ? '...' : '');
+        }
+
+        updatedSessions[sIndex].messages.push(userMsg);
+        setSessions(updatedSessions);
+        setIsGenerating(true);
+
+        let academicData = null;
+        let webData = null;
+        let promptAugmentation = '';
+
+        if (activeMode === 'academic') {
+          setSearchStatus('Crossref, OpenAlex, arXiv에서 논문 초록 수집 중...');
+          academicData = await fetchAcademicPapers(userPrompt);
+          setSearchStatus('논문 초록 다각도 인용 브리핑 생성 중...');
+
+          if (academicData && academicData.length > 0) {
+            promptAugmentation = '\n\n[실제 학술 논문 및 초록 메타데이터]\n' + academicData.map((p, idx) => {
+              return '논문 ' + (idx + 1) + ':\n' +
+                '- 제목: ' + p.title + '\n' +
+                '- 저자: ' + p.authors + ' (인용키: [' + p.citationKey + '])\n' +
+                '- 발행연도: ' + p.year + '\n' +
+                '- 저널/출처: ' + p.journal + '\n' +
+                '- DOI/링크: ' + (p.doi || p.url) + '\n' +
+                '- 피인용: ' + p.citedCount + '회\n' +
+                '- 초록(Abstract):\n' + p.fullAbstract + '\n';
+            }).join('\n');
+          }
+        } else if (activeMode === 'search') {
+          setSearchStatus('실시간 웹 지식 인덱스 탐색 중...');
+          webData = await fetchWebKnowledge(userPrompt);
+          setSearchStatus('검색 데이터 취합 및 답변 작성 중...');
+
+          if (webData && webData.length > 0) {
+            promptAugmentation = '\n\n[검색된 웹 지식 요약]\n' + webData.map((w, idx) => {
+              return '출처 ' + (idx + 1) + ': ' + w.title + ' (' + w.source + ')\n' +
+                'URL: ' + w.url + '\n' +
+                '내용: ' + w.snippet + '\n';
+            }).join('\n');
+          }
+        }
+
+        const assistantMsg = {
+          role: 'assistant',
+          content: '',
+          reasoningContent: '',
+          mode: activeMode,
+          model: isDemoMode ? (targetModel + ' (시뮬레이션)') : targetModel,
+          academicPapers: academicData,
+          webSources: webData,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+
+        updatedSessions[sIndex].messages.push(assistantMsg);
+        setSessions([...updatedSessions]);
+
+        abortControllerRef.current = new AbortController();
+        const activeSystemPrompt = customPrompts[activeMode] || DEFAULT_PROMPTS[activeMode];
+
+        // Demo / Simulation Fallback
+        if (isDemoMode || connectionStatus === 'error') {
+          try {
+            let simReasoning = '';
+            let simText = '';
+
+            if (activeMode === 'academic') {
+              const cit1 = academicData?.[0]?.citationKey || 'Vaswani et al., 2017';
+              const cit2 = academicData?.[1]?.citationKey || 'Brown et al., 2020';
+              const cit3 = academicData?.[2]?.citationKey || 'Smith et al., 2023';
+
+              simReasoning = '1. OpenAlex 및 Crossref로부터 질의 관련 초록 ' + (academicData?.length || 3) + '건 분석\n2. 핵심 메커니즘과 일반화 지지 연구 추출\n3. 계산 복잡도 및 환각 이슈를 제기한 상충 논문 분리 대조\n4. 최종 구조화 브리핑 생성 단계 돌입';
+
+              simText = '### 1. 🌐 연구 동향 및 전체 종합 정리\n' +
+                '제시해주신 주제("' + userPrompt + '")와 관련하여 학술 데이터를 종합한 결과, 기초 원리 분석에서 실증적 스케일링과 벤치마크 단계로 연구가 확장되고 있습니다.\n\n' +
+                '### 2. 🤝 지지 및 일치하는 연구 주장 (연구자, 연도 인용)\n' +
+                '- [' + cit1 + ']: 주요 아키텍처를 통해 기존 방식 대비 유의미한 연산 효율성과 처리 정확도 향상을 입증하였습니다.\n' +
+                '- [' + cit2 + ']: 파라미터 스케일링을 통해 일반화 성능이 비례하여 증가함을 확인하였습니다.\n\n' +
+                '### 3. ⚖️ 반대 견해, 상충되는 주장 및 연구의 한계 (연구자, 연도 인용)\n' +
+                '- [' + cit3 + ']: 반면 자원 제약적 환경에서의 메모리 병목 및 추론 지연 문제를 지적하며 경량화와 실시간 검증 레이어의 도입 필요성을 제기하였습니다.\n\n' +
+                FENCE + 'mermaid\ngraph LR\n    A[' + cit1 + '] -->|효율성 증명| C[종합 이론 체계]\n    B[' + cit2 + '] -->|스케일링 지지| C\n    D[' + cit3 + '] -.->|한계 지적 / 경량화 제안| C\n' + FENCE;
+            } else if (activeMode === 'reasoning') {
+              simReasoning = 'Step 1: 사용자의 복합 질문에서 문제의 제약 조건과 핵심 목적 함수 분리\nStep 2: 단계적 파이프라인(요구분석 -> 원리추론 -> 한계대응) 매핑\nStep 3: 수학적 정밀도와 실시간 적용 가능성 시뮬레이션 계산';
+
+              simText = '1. [핵심 요약 및 결론]\n"' + userPrompt + '"에 대한 다각도 심층 분석 결과, 모듈화된 파이프라인과 실시간 검증 레이어를 결합하는 것이 최적의 해법입니다.\n\n' +
+                '2. [단계별 심층 추론 및 원리 분석 (Step-by-Step)]\n- **1단계 (요구사항 정의)**: 데이터 의존성 및 병목 구간 파악\n- **2단계 (경로 최적화)**: 비동기 분기 처리 및 캐싱 계층 배치\n- **3단계 (보안 및 예외 방어)**: 경계 조건에 대한 방어 로직 검증\n\n' +
+                '3. [고려해야 할 변수 및 대안]\n- 지연 시간과 자원 소비량 사이의 트레이드오프 ($T_{total} = O(N \\log N)$)\n\n' +
+                '4. [최종 권고사항]\n프로토타입을 통해 단계별 검증을 거친 후 GitHub 연동을 통해 버전을 관리하십시오.\n\n' +
+                FENCE + 'mermaid\ngraph TD\n    Start[입력 요구사항] --> Step1[1단계: 파이프라인 분리]\n    Step1 --> Step2[2단계: 병목 최적화]\n    Step2 --> Step3[3단계: 보안 예외 검증]\n    Step3 --> End[최종 권고 도출]\n' + FENCE;
+            } else {
+              simText = '안녕하세요! **Ollama Say**입니다.\n\n질문하신 "' + userPrompt + '"에 대한 답변입니다:\n\n수식 예시: $$\\sum_{i=1}^n x_i = \\frac{n(n+1)}{2}$$\n\n좌측 Markdown 에디터의 **[커서 위치 삽입]** 버튼을 눌러 이 답변을 바로 문서로 저장하거나 상단 툴바의 **GitHub Push**로 커밋할 수 있습니다!';
+            }
+
+            if (simReasoning) {
+              setLiveReasoningText(simReasoning);
+            }
+
+            const words = simText.split(' ');
+            let accumulated = '';
+            for (let i = 0; i < words.length; i++) {
+              if (abortControllerRef.current?.signal.aborted) break;
+              accumulated += (i === 0 ? '' : ' ') + words[i];
+              setSessions(prev => {
+                const copy = [...prev];
+                const cIdx = copy.findIndex(s => s.id === currentSessionId);
+                if (cIdx !== -1 && copy[cIdx].messages.length > 0) {
+                  const lastIdx = copy[cIdx].messages.length - 1;
+                  copy[cIdx].messages[lastIdx].content = accumulated;
+                  copy[cIdx].messages[lastIdx].reasoningContent = simReasoning;
+                }
+                return copy;
+              });
+              await new Promise(r => setTimeout(r, 20));
+            }
+          } catch (err) {}
+          finally {
+            setIsGenerating(false);
+            setSearchStatus(null);
+            abortControllerRef.current = null;
+          }
+          return;
+        }
+
+        // Live Ollama API Stream
+        try {
+          const sanitizedUrl = activeUrl.replace(/\/+$/, '');
+          const contextMessages = [{ role: 'system', content: activeSystemPrompt }];
+
+          const pastMessages = updatedSessions[sIndex].messages.slice(0, -2);
+          pastMessages.slice(-6).forEach(m => {
+            contextMessages.push({ role: m.role, content: m.content });
+          });
+
+          contextMessages.push({
+            role: 'user',
+            content: userPrompt + promptAugmentation
+          });
+
+          const response = await fetch(sanitizedUrl + '/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: targetModel,
+              messages: contextMessages,
+              options: {
+                temperature: activeMode === 'reasoning' || activeMode === 'academic' ? 0.2 : temperature
+              },
+              stream: true
+            }),
+            signal: abortControllerRef.current.signal
+          });
+
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          setSearchStatus(null);
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder('utf-8');
+          let accumulatedText = '';
+          let accumulatedReasoning = '';
+          let inThinkTag = false;
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n').filter(l => l.trim() !== '');
+
+            for (const line of lines) {
+              try {
+                const parsed = JSON.parse(line);
+                const rawChunk = parsed.message?.content || '';
+                
+                // Real-time Reasoning Tag Parsing (<think>...</think> or Ollama message.thinking)
+                if (parsed.message?.thinking) {
+                  accumulatedReasoning += parsed.message.thinking;
+                  setLiveReasoningText(accumulatedReasoning);
+                } else if (rawChunk.includes('<think>')) {
+                  inThinkTag = true;
+                  const parts = rawChunk.split('<think>');
+                  accumulatedText += parts[0];
+                  accumulatedReasoning += parts[1] || '';
+                  setLiveReasoningText(accumulatedReasoning);
+                } else if (inThinkTag) {
+                  if (rawChunk.includes('</think>')) {
+                    inThinkTag = false;
+                    const parts = rawChunk.split('</think>');
+                    accumulatedReasoning += parts[0];
+                    accumulatedText += parts[1] || '';
+                    setLiveReasoningText(accumulatedReasoning);
+                  } else {
+                    accumulatedReasoning += rawChunk;
+                    setLiveReasoningText(accumulatedReasoning);
+                  }
+                } else {
+                  accumulatedText += rawChunk;
+                }
+
+                setSessions(prev => {
+                  const copy = [...prev];
+                  const cIdx = copy.findIndex(s => s.id === currentSessionId);
+                  if (cIdx !== -1 && copy[cIdx].messages.length > 0) {
+                    const lIdx = copy[cIdx].messages.length - 1;
+                    copy[cIdx].messages[lIdx].content = accumulatedText;
+                    copy[cIdx].messages[lIdx].reasoningContent = accumulatedReasoning;
+                  }
+                  return copy;
+                });
+              } catch (e) {}
+            }
+          }
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            setSessions(prev => {
+              const copy = [...prev];
+              const cIdx = copy.findIndex(s => s.id === currentSessionId);
+              if (cIdx !== -1 && copy[cIdx].messages.length > 0) {
+                const lIdx = copy[cIdx].messages.length - 1;
+                copy[cIdx].messages[lIdx].content = '⚠️ **Ollama 로컬 서버 연결 실패 (Failed to fetch)**\n\n- 로컬에서 원활히 사용하려면 상단 설정에서 **[내 PC에 앱 다운로드 (.html)]** 후 실행해 주세요.\n- 또는 시뮬레이션 모드를 켜서 즉시 테스트할 수 있습니다.';
+                copy[cIdx].messages[lIdx].isError = true;
+              }
+              return copy;
+            });
+          }
+        } finally {
+          setIsGenerating(false);
+          setSearchStatus(null);
+          abortControllerRef.current = null;
+        }
+      };
+
+      const handleStop = () => {
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+          setIsGenerating(false);
+          setSearchStatus(null);
+        }
+      };
+
+      // Filtered documents by search
+      const filteredDocs = useMemo(() => {
+        if (!docSearchQuery.trim()) return editorDocs;
+        const q = docSearchQuery.toLowerCase();
+        return editorDocs.filter(d => (d.title && d.title.toLowerCase().includes(q)) || (d.content && d.content.toLowerCase().includes(q)));
+      }, [editorDocs, docSearchQuery]);
+
+      return (
+        <div className="flex h-screen w-full bg-slate-950 text-slate-100 font-sans overflow-hidden">
+          {notification && (
+            <div className="fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white shadow-2xl animate-fade-in">
+              <span className="text-indigo-400">●</span>
+              <span>{notification.msg}</span>
+            </div>
+          )}
+
+          {/* Hidden File Inputs for Import */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleImportSingleFile}
+            accept=".md,.txt,.markdown"
+            className="hidden"
+          />
+          <input
+            type="file"
+            ref={bulkImportInputRef}
+            onChange={handleBulkImportDocs}
+            accept=".json"
+            className="hidden"
+          />
+
+          {/* ==================== LEFT: MULTI-DOCUMENT MARKDOWN STUDIO ==================== */}
+          <div className={(isEditorOpen ? 'w-full md:w-[50%] lg:w-[46%]' : 'w-0') + ' transition-all duration-300 border-r border-slate-800 bg-slate-900/90 flex flex-col h-full overflow-hidden shrink-0 relative'}>
+            
+            {/* Top Editor Header */}
+            <div className="h-14 border-b border-slate-800 px-3 flex items-center justify-between bg-slate-950/70 shrink-0 gap-1.5">
+              <div className="flex items-center gap-1.5 overflow-hidden">
+                <button
+                  onClick={() => setIsDocListOpen(!isDocListOpen)}
+                  className={'p-1.5 rounded-lg border text-xs transition-colors ' + (isDocListOpen ? 'bg-indigo-950 text-indigo-300 border-indigo-500/40' : 'bg-slate-800 text-slate-400 border-slate-700')}
+                  title="문서 목록 사이드바 열기/닫기"
+                >
+                  📑
+                </button>
+                <input
+                  type="text"
+                  value={docTitle}
+                  onChange={(e) => setDocTitle(e.target.value)}
+                  className="bg-transparent text-xs sm:text-sm font-bold text-slate-200 outline-none hover:bg-slate-800/60 focus:bg-slate-800 px-2 py-1 rounded transition-colors truncate max-w-[130px] sm:max-w-[170px]"
+                  title="문서 제목 수정"
+                />
+              </div>
+
+              <div className="flex items-center gap-1">
+                {/* View Mode Toggle */}
+                <div className="flex bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-xs">
+                  <button
+                    onClick={() => setEditorViewMode('edit')}
+                    className={'px-2 py-1 rounded ' + (editorViewMode === 'edit' ? 'bg-indigo-600 text-white font-bold' : 'text-slate-400 hover:text-white')}
+                    title="에디터만 보기"
+                  >
+                    MD
+                  </button>
+                  <button
+                    onClick={() => setEditorViewMode('preview')}
+                    className={'px-2 py-1 rounded ' + (editorViewMode === 'preview' ? 'bg-indigo-600 text-white font-bold' : 'text-slate-400 hover:text-white')}
+                    title="미리보기만 보기"
+                  >
+                    PV
+                  </button>
+                  <button
+                    onClick={() => setEditorViewMode('split')}
+                    className={'px-2 py-1 rounded ' + (editorViewMode === 'split' ? 'bg-indigo-600 text-white font-bold' : 'text-slate-400 hover:text-white')}
+                    title="분할 보기"
+                  >
+                    분할
+                  </button>
+                </div>
+
+                {/* GitHub Push Button */}
+                <button
+                  onClick={() => setIsPushModalOpen(true)}
+                  className="px-2 py-1 bg-gradient-to-r from-purple-700 to-indigo-600 hover:from-purple-600 hover:to-indigo-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-md transition-all"
+                  title="GitHub 저장소에 커밋 & 푸시"
+                >
+                  <span>🐙</span>
+                  <span className="hidden sm:inline">GitHub 푸시</span>
+                </button>
+
+                {/* Bulk Actions Dropdown / Tools */}
+                <button
+                  onClick={handleBulkExportAllDocs}
+                  className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition-colors text-xs border border-slate-700/60"
+                  title="전체 문서 일괄 백업 (.json)"
+                >
+                  📦 전체저장
+                </button>
+
+                <button
+                  onClick={handleExportSingleMarkdown}
+                  className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition-colors text-xs border border-slate-700/60"
+                  title="현재 문서 .md 내보내기"
+                >
+                  💾
+                </button>
+
+                <button
+                  onClick={() => openInNewWindow(editorContent, docTitle)}
+                  className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-300 hover:text-white transition-colors text-xs border border-slate-700/60"
+                  title="새 창에서 확대/축소 보기"
+                >
+                  ↗
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1 px-3 py-1.5 bg-slate-950 border-b border-slate-800 overflow-x-auto scrollbar-thin text-xs">
+              <span className="text-[11px] text-slate-500 font-semibold uppercase shrink-0 mr-1">도구:</span>
+              <button onClick={() => insertFormatting('h1')} className="px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300 font-bold" title="대제목">H1</button>
+              <button onClick={() => insertFormatting('h2')} className="px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300 font-bold" title="중제목">H2</button>
+              <button onClick={() => insertFormatting('h3')} className="px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300 font-bold" title="소제목">H3</button>
+              <div className="w-px h-4 bg-slate-800 mx-0.5" />
+              <button onClick={() => insertFormatting('bold')} className="px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300 font-bold" title="볼드 (진하게)">**B**</button>
+              <button onClick={() => insertFormatting('italic')} className="px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300 italic" title="기울임">*I*</button>
+              <button onClick={() => insertFormatting('bullet')} className="px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300" title="글머리 기호">• 목록</button>
+              <button onClick={() => insertFormatting('number')} className="px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300" title="숫자 목록">1. 목록</button>
+              <div className="w-px h-4 bg-slate-800 mx-0.5" />
+              <button onClick={() => insertFormatting('code')} className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 hover:bg-slate-800 text-sky-400 font-mono" title="코드 블록">`Code`</button>
+              <button onClick={() => insertFormatting('mermaid')} className="px-2 py-0.5 rounded bg-indigo-950/60 border border-indigo-500/30 hover:bg-indigo-900/60 text-indigo-300 font-semibold" title="Mermaid 다이어그램">📊 Mermaid</button>
+              <button onClick={() => insertFormatting('math')} className="px-2 py-0.5 rounded bg-purple-950/60 border border-purple-500/30 hover:bg-purple-900/60 text-purple-300 font-mono" title="KaTeX 수식">$$ 수식</button>
+              <button onClick={() => insertFormatting('table')} className="px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300" title="표(테이블) 삽입">⊞ 표</button>
+            </div>
+
+            {/* Main Editor Body: Document Sidebar + Code/PV */}
+            <div className="flex-1 flex overflow-hidden">
+              {/* Document List Sidebar */}
+              {isDocListOpen && (
+                <div className="w-48 bg-slate-950/95 border-r border-slate-800 flex flex-col shrink-0">
+                  <div className="p-2 border-b border-slate-800 flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-400">문서 ({editorDocs.length})</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={handleCreateNewDoc}
+                        className="px-1.5 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[10px] font-semibold"
+                        title="새 문서 추가"
+                      >
+                        ＋ 추가
+                      </button>
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded text-[10px]"
+                        title="단일 .md 파일 열기"
+                      >
+                        📂
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-1.5 border-b border-slate-800/80">
+                    <input
+                      type="text"
+                      placeholder="문서 검색..."
+                      value={docSearchQuery}
+                      onChange={(e) => setDocSearchQuery(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto p-1.5 space-y-1 scrollbar-thin">
+                    {filteredDocs.map(doc => (
+                      <div
+                        key={doc.id}
+                        onClick={() => handleSelectDoc(doc)}
+                        className={'group flex items-center justify-between p-2 rounded-lg text-xs cursor-pointer transition-colors ' + (
+                          doc.id === currentDocId
+                            ? 'bg-indigo-950/90 text-indigo-200 border border-indigo-500/40 font-semibold'
+                            : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200 border border-transparent'
+                        )}
+                      >
+                        <span className="truncate pr-1">{doc.title}</span>
+                        {editorDocs.length > 1 && (
+                          <button
+                            onClick={(e) => handleDeleteDoc(doc.id, e)}
+                            className="opacity-0 group-hover:opacity-100 hover:text-rose-400 text-[11px] p-0.5"
+                            title="문서 삭제"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="p-2 border-t border-slate-800/80 bg-slate-950 flex justify-between items-center text-[10px] text-slate-500">
+                    <button
+                      onClick={() => bulkImportInputRef.current?.click()}
+                      className="hover:text-indigo-400 underline"
+                    >
+                      백업 복원(JSON)
+                    </button>
+                    <span>IndexedDB 연동</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Textarea Editor Area */}
+              {(editorViewMode === 'edit' || editorViewMode === 'split') && (
+                <div className={(editorViewMode === 'split' ? 'w-1/2 border-r border-slate-800' : 'w-full') + ' h-full flex flex-col bg-slate-950/40'}>
+                  <textarea
+                    ref={editorTextareaRef}
+                    value={editorContent}
+                    onChange={(e) => setEditorContent(e.target.value)}
+                    placeholder="마크다운, 수식, 머메이드 다이어그램을 자유롭게 작성하세요..."
+                    className="w-full h-full p-4 bg-transparent text-slate-200 editor-font text-xs sm:text-sm leading-relaxed outline-none resize-none scrollbar-thin selection:bg-indigo-600/40"
+                  />
+                </div>
+              )}
+
+              {/* Live Render Preview Area */}
+              {(editorViewMode === 'preview' || editorViewMode === 'split') && (
+                <div
+                  ref={previewContainerRef}
+                  className={(editorViewMode === 'split' ? 'w-1/2' : 'w-full') + ' h-full p-4 overflow-y-auto bg-slate-950/80 scrollbar-thin'}
+                >
+                  <div
+                    className="prose-custom text-xs sm:text-sm"
+                    dangerouslySetInnerHTML={{ __html: renderMarkdownAndMath(editorContent, 'editor') }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ==================== RIGHT: AI CHAT & STREAMING REASONING ==================== */}
+          <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+            
+            {/* Top Navigation Bar */}
+            <header className="h-14 border-b border-slate-800/80 bg-slate-900/50 backdrop-blur-md flex items-center justify-between px-3 sm:px-5 shrink-0 z-10">
+              <div className="flex items-center gap-2 sm:gap-3 overflow-hidden">
+                <button
+                  onClick={() => setIsEditorOpen(!isEditorOpen)}
+                  className={'p-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1 transition-colors ' + (
+                    isEditorOpen ? 'bg-indigo-950/80 text-indigo-300 border-indigo-500/40' : 'bg-slate-800 text-slate-300 border-slate-700'
+                  )}
+                  title="좌측 마크다운 에디터 열기/닫기"
+                >
+                  <span>📝</span>
+                  <span className="hidden sm:inline">{isEditorOpen ? '에디터 닫기' : '에디터 열기'}</span>
+                </button>
+
+                {/* Model Selector */}
+                <div className="flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1 rounded-xl border border-slate-700/60 shadow-inner">
+                  <span className="text-indigo-400 text-xs">🤖</span>
+                  {modelListDetailed.length > 0 ? (
+                    <select
+                      value={selectedModel}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                      className="bg-transparent text-xs font-semibold text-slate-200 outline-none cursor-pointer pr-1 max-w-[140px] sm:max-w-[200px]"
+                    >
+                      {modelListDetailed.map(m => (
+                        <option key={m.name} value={m.name} className="bg-slate-900 text-slate-200">
+                          {m.name} {m.details?.parameter_size ? ('(' + m.details.parameter_size + ')') : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="모델명 (예: llama3)"
+                      value={customModelInput}
+                      onChange={(e) => setCustomModelInput(e.target.value)}
+                      className="bg-transparent text-xs text-slate-200 placeholder-slate-500 outline-none w-24 sm:w-32"
+                    />
+                  )}
+                  <button 
+                    onClick={() => fetchOllamaModels(activeUrl)} 
+                    disabled={isLoadingModels || isDemoMode}
+                    className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white transition-colors text-xs"
+                    title="Ollama 모델 목록 새로고침"
+                  >
+                    🔄
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsHistoryOpen(!isHistoryOpen)}
+                  className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors text-xs flex items-center gap-1"
+                  title="대화 기록"
+                >
+                  <span>💬</span>
+                  <span className="hidden sm:inline">대화목록</span>
+                </button>
+
+                <button
+                  onClick={() => setIsSettingsOpen(true)}
+                  className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors text-xs flex items-center gap-1"
+                  title="환경설정, 시스템 프롬프트 & GitHub 설정"
+                >
+                  <span>⚙️</span>
+                  <span className="hidden sm:inline">설정</span>
+                </button>
+              </div>
+            </header>
+
+            {/* Chat History Dropdown Drawer */}
+            {isHistoryOpen && (
+              <div className="absolute top-14 right-0 w-64 bg-slate-900/95 border-l border-b border-slate-800 z-30 p-3 shadow-2xl backdrop-blur-md flex flex-col max-h-[70vh]">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800 mb-2">
+                  <span className="text-xs font-bold text-slate-300">대화 기록 ({sessions.length})</span>
+                  <button
+                    onClick={() => {
+                      const newId = Date.now().toString();
+                      setSessions([{ id: newId, title: '새 대화', messages: [], createdAt: new Date().toISOString() }, ...sessions]);
+                      setCurrentSessionId(newId);
+                    }}
+                    className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[11px] font-semibold"
+                  >
+                    ＋ 새 대화
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto space-y-1 scrollbar-thin">
+                  {sessions.map(s => (
+                    <div
+                      key={s.id}
+                      onClick={() => { setCurrentSessionId(s.id); setIsHistoryOpen(false); }}
+                      className={'p-2 rounded-lg text-xs cursor-pointer flex items-center justify-between ' + (
+                        s.id === currentSessionId ? 'bg-indigo-950 text-indigo-200 border border-indigo-500/40' : 'text-slate-400 hover:bg-slate-800'
+                      )}
+                    >
+                      <span className="truncate">{s.title}</span>
+                      {sessions.length > 1 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const filtered = sessions.filter(x => x.id !== s.id);
+                            setSessions(filtered);
+                            if (currentSessionId === s.id) setCurrentSessionId(filtered[0].id);
+                          }}
+                          className="hover:text-rose-400 ml-1 text-[10px]"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div id="chat-messages-container" className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 scrollbar-thin">
+              {currentSession.messages.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center max-w-xl mx-auto px-4">
+                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-500 flex items-center justify-center shadow-xl shadow-indigo-500/20 text-2xl mb-4">
+                    ✨
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-white mb-2">무엇을 탐구하고 기록할까요?</h2>
+                  <p className="text-xs sm:text-sm text-slate-400 mb-6 leading-relaxed">
+                    로컬 LLM과 대화하며 생성된 수식, 마크다운, <span className="text-indigo-300 font-semibold">Mermaid 다이어그램</span> 답변을 좌측 에디터에 삽입하고 바로 GitHub에 푸시하세요.
+                  </p>
+
+                  <div className="grid grid-cols-2 gap-2.5 w-full text-left">
+                    {Object.values(MODES).map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => setActiveMode(m.id)}
+                        className={'p-3 rounded-xl border transition-all text-left ' + (
+                          activeMode === m.id ? 'bg-slate-800/90 border-indigo-500/50' : 'bg-slate-900/50 border-slate-800 hover:bg-slate-800/40'
+                        )}
+                      >
+                        <div className="flex items-center gap-1.5 mb-1 font-semibold text-xs text-slate-200">
+                          <span>{m.icon}</span>
+                          <span>{m.name}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400">
+                          {m.id === 'instant' ? '빠른 일상 답변' : m.id === 'reasoning' ? '단계별 심층 추론 & 실시간 사고 보기' : m.id === 'search' ? '웹 검색 출처 결합' : '논문 초록 다각도 인용'}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                currentSession.messages.map((msg, idx) => {
+                  const isSourceView = !!chatSourceViewMap[idx];
+                  return (
+                    <div
+                      key={idx}
+                      className={'flex gap-2.5 max-w-4xl mx-auto ' + (msg.role === 'user' ? 'justify-end' : 'justify-start')}
+                    >
+                      {msg.role === 'assistant' && (
+                        <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center shrink-0 text-xs shadow">
+                          🤖
+                        </div>
+                      )}
+
+                      <div className={'flex flex-col space-y-1.5 max-w-[90%] sm:max-w-[85%] ' + (msg.role === 'user' ? 'items-end' : 'items-start')}>
+                        <div className="flex items-center gap-2 text-[10px] text-slate-400 px-1">
+                          <span className="font-semibold text-slate-300">{msg.role === 'user' ? '나' : msg.model || 'Ollama'}</span>
+                          <span>•</span>
+                          <span className="capitalize">{msg.mode}</span>
+                          <span>•</span>
+                          <span>{msg.timestamp}</span>
+                        </div>
+
+                        {/* Reasoning Panel (if reasoning content exists) */}
+                        {msg.role === 'assistant' && msg.reasoningContent && (
+                          <div className="w-full p-3 rounded-xl bg-purple-950/30 border border-purple-500/30 text-xs mb-1 text-purple-200">
+                            <div className="flex items-center gap-1.5 font-bold mb-1 text-purple-300">
+                              <span>🧠</span>
+                              <span>심층 추론 및 사고 과정 (Reasoning Thought)</span>
+                            </div>
+                            <pre className="whitespace-pre-wrap font-mono text-[11px] text-purple-200/90 leading-relaxed bg-slate-950/60 p-2 rounded-lg border border-purple-900/50">
+                              {msg.reasoningContent}
+                            </pre>
+                          </div>
+                        )}
+
+                        <div className={'rounded-2xl p-4 text-xs sm:text-sm leading-relaxed shadow-sm w-full ' + (
+                          msg.role === 'user'
+                            ? 'bg-indigo-600 text-white rounded-tr-none'
+                            : msg.isError
+                            ? 'bg-rose-950/40 border border-rose-800/60 text-rose-200 rounded-tl-none'
+                            : 'bg-slate-900/90 border border-slate-800 text-slate-100 rounded-tl-none'
+                        )}>
+                          {msg.academicPapers && msg.academicPapers.length > 0 && (
+                            <div className="mb-3.5 p-3 rounded-xl bg-slate-950/90 border border-blue-500/30">
+                              <div className="flex items-center justify-between mb-2 border-b border-slate-800 pb-1.5">
+                                <div className="flex items-center gap-1.5 text-blue-400 font-semibold text-xs">
+                                  <span>📚</span>
+                                  <span>수집된 논문 메타데이터 및 초록 ({msg.academicPapers.length}건)</span>
+                                </div>
+                                <span className="text-[10px] text-slate-400">OpenAlex & Crossref DB</span>
+                              </div>
+
+                              <div className="space-y-2 max-h-56 overflow-y-auto pr-1 scrollbar-thin">
+                                {msg.academicPapers.map((paper, pIdx) => (
+                                  <div key={pIdx} className="p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700">
+                                    <div className="flex items-start justify-between gap-1.5">
+                                      <h4 className="text-xs font-semibold text-slate-200 line-clamp-1">{paper.title}</h4>
+                                      {paper.doi || paper.url ? (
+                                        <a href={paper.doi || paper.url} target="_blank" rel="noreferrer" className="text-blue-400 hover:text-blue-300 text-xs shrink-0">↗</a>
+                                      ) : null}
+                                    </div>
+                                    <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mt-0.5 font-mono">
+                                      <span className="text-blue-300 font-bold">{paper.citationKey}</span>
+                                      <span>|</span>
+                                      <span>{paper.journal}</span>
+                                      <span>|</span>
+                                      <span>피인용 {paper.citedCount}회</span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-400 mt-1 bg-slate-950/60 p-1.5 rounded border border-slate-800/40 line-clamp-3">
+                                      <strong className="text-slate-300">초록(Abstract): </strong>{paper.abstract}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {msg.webSources && msg.webSources.length > 0 && (
+                            <div className="mb-3 p-2.5 rounded-xl bg-slate-950/90 border border-emerald-500/30">
+                              <div className="flex items-center gap-1.5 text-emerald-400 font-semibold text-xs mb-1.5">
+                                <span>🌐</span>
+                                <span>참조한 실시간 웹 지식 출처</span>
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                {msg.webSources.map((src, sIdx) => (
+                                  <a
+                                    key={sIdx}
+                                    href={src.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-emerald-500/40 transition-colors flex items-start justify-between gap-1"
+                                  >
+                                    <div className="overflow-hidden">
+                                      <p className="text-xs font-medium text-slate-200 hover:text-emerald-300 truncate">{src.title}</p>
+                                      <p className="text-[10px] text-slate-400 truncate">{src.snippet}</p>
+                                    </div>
+                                    <span className="text-xs text-slate-500">↗</span>
+                                  </a>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Message Content: Either Rendered or Raw Source */}
+                          {isSourceView ? (
+                            <pre className="p-3 rounded-lg bg-slate-950 font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed border border-slate-800">
+                              {msg.content}
+                            </pre>
+                          ) : (
+                            <div
+                              className="prose-custom text-xs sm:text-sm"
+                              dangerouslySetInnerHTML={{ __html: renderMarkdownAndMath(msg.content, 'msg_' + idx) || '<span class="text-slate-400 animate-pulse">답변 생성 중...</span>' }}
+                            />
+                          )}
+                        </div>
+
+                        {/* Assistant Actions Bar */}
+                        {msg.role === 'assistant' && msg.content && (
+                          <div className="flex items-center flex-wrap gap-1.5 px-1 pt-1 text-[11px]">
+                            <button
+                              onClick={() => handleInsertAtCursor(msg.content)}
+                              className="px-2 py-1 rounded-lg bg-indigo-950/70 hover:bg-indigo-900/90 text-indigo-300 border border-indigo-500/40 font-semibold flex items-center gap-1 transition-colors"
+                              title="왼쪽 에디터의 현재 커서 위치에 답변 삽입"
+                            >
+                              <span>📥</span>
+                              <span>커서위치 삽입</span>
+                            </button>
+
+                            <button
+                              onClick={() => setChatSourceViewMap(prev => ({ ...prev, [idx]: !prev[idx] }))}
+                              className={'px-2 py-1 rounded-lg border transition-colors flex items-center gap-1 ' + (
+                                isSourceView ? 'bg-amber-950/60 text-amber-300 border-amber-500/40 font-semibold' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                              )}
+                              title="원본 소스 / 렌더링 보기 전환"
+                            >
+                              <span>{isSourceView ? '🎨 렌더링보기' : '🔍 소스보기'}</span>
+                            </button>
+
+                            <button
+                              onClick={() => copyRawMarkdown(msg.content)}
+                              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors flex items-center gap-1"
+                              title="순수 마크다운 텍스트 복사"
+                            >
+                              <span>📋</span>
+                              <span>MD 복사</span>
+                            </button>
+
+                            <button
+                              onClick={() => copyRenderedHtml(msg.content)}
+                              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors flex items-center gap-1"
+                              title="서식 있는 HTML 복사"
+                            >
+                              <span>✨</span>
+                              <span>Render 복사</span>
+                            </button>
+
+                            <button
+                              onClick={() => openInNewWindow(msg.content, (msg.model || 'Ollama') + ' 답변 상세')}
+                              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors flex items-center gap-1"
+                              title="새 팝업창에서 확대/축소 보기"
+                            >
+                              <span>↗</span>
+                              <span>새창</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {msg.role === 'user' && (
+                        <div className="w-7 h-7 rounded-lg bg-slate-800 flex items-center justify-center shrink-0 border border-slate-700 text-xs">
+                          👤
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+
+              {/* Real-time Streaming Reasoning Floating Banner */}
+              {isGenerating && liveReasoningText && showReasoningStream && (
+                <div className="max-w-4xl mx-auto p-3.5 rounded-2xl bg-purple-950/40 border border-purple-500/40 text-purple-200 text-xs shadow-xl animate-pulse">
+                  <div className="flex items-center justify-between mb-1.5 font-semibold text-purple-300">
+                    <div className="flex items-center gap-1.5">
+                      <span>🧠</span>
+                      <span>실시간 추론 사고 스트림 (Live Reasoning)</span>
+                    </div>
+                    <span className="text-[10px] text-purple-400">Streaming...</span>
+                  </div>
+                  <pre className="font-mono text-[11px] text-purple-200 whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto scrollbar-thin">
+                    {liveReasoningText}
+                  </pre>
+                </div>
+              )}
+
+              {searchStatus && (
+                <div className="flex items-center justify-center my-2">
+                  <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-950/80 border border-indigo-500/40 text-indigo-300 text-xs shadow-lg animate-pulse">
+                    <span>⏳</span>
+                    <span>{searchStatus}</span>
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </div>
+
+            <div className="p-3 sm:p-4 border-t border-slate-800/80 bg-slate-900/60 backdrop-blur-sm shrink-0">
+              <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                    {Object.values(MODES).map((mode) => {
+                      const isActive = activeMode === mode.id;
+                      return (
+                        <button
+                          key={mode.id}
+                          type="button"
+                          onClick={() => setActiveMode(mode.id)}
+                          className={'flex items-center gap-1 px-2.5 sm:px-3 py-1 rounded-lg text-xs font-semibold transition-all ' + (
+                            isActive 
+                              ? (mode.color + ' shadow-sm font-bold')
+                              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                          )}
+                        >
+                          <span>{mode.icon}</span>
+                          <span>{mode.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Real-time Reasoning Stream Toggle Button */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowReasoningStream(!showReasoningStream)}
+                      className={'px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5 ' + (
+                        showReasoningStream 
+                          ? 'bg-purple-950/80 text-purple-300 border-purple-500/40' 
+                          : 'bg-slate-900 text-slate-400 border-slate-800'
+                      )}
+                      title="추론 과정 실시간 스트리밍 패널 표시 토글"
+                    >
+                      <span>🧠</span>
+                      <span>추론 과정 보기: {showReasoningStream ? 'ON' : 'OFF'}</span>
+                    </button>
+
+                    {isGenerating && (
+                      <button
+                        type="button"
+                        onClick={handleStop}
+                        className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 text-xs font-semibold border border-rose-500/30 transition-colors flex items-center gap-1"
+                      >
+                        <span>■</span>
+                        <span>중단</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="relative flex items-center bg-slate-900 rounded-2xl border border-slate-700/80 focus-within:border-indigo-500 shadow-lg transition-all">
+                  <textarea
+                    value={inputText}
+                    onChange={(e) => setInputText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendMessage();
+                      }
+                    }}
+                    placeholder={
+                      activeMode === 'academic'
+                        ? "학술 논문 키워드를 입력하세요 (예: Quantum computing, LLM hallucination, Transformer)"
+                        : activeMode === 'search'
+                        ? "웹 검색과 함께 질의할 내용을 입력하세요"
+                        : activeMode === 'reasoning'
+                        ? "복잡한 분석 및 단계별 심층 추론이 필요한 질문을 입력하세요"
+                        : "질문이나 요청 사항을 입력하세요 (Enter: 전송, Shift+Enter: 줄바꿈)"
+                    }
+                    rows={1}
+                    className="w-full bg-transparent px-4 py-3 pr-20 text-xs sm:text-sm text-slate-100 placeholder-slate-500 outline-none resize-none max-h-32"
+                    style={{ minHeight: '48px' }}
+                  />
+
+                  <div className="absolute right-2 flex items-center gap-1.5">
+                    <button
+                      type="submit"
+                      disabled={!inputText.trim() || isGenerating}
+                      className={'p-2 rounded-xl transition-all font-semibold ' + (
+                        inputText.trim() && !isGenerating
+                          ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md hover:opacity-90'
+                          : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                      )}
+                      title="전송"
+                    >
+                      ➔
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </main>
+
+          {/* ==================== GITHUB COMMIT & PUSH MODAL ==================== */}
+          {isPushModalOpen && (
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg flex flex-col overflow-hidden shadow-2xl">
+                <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">🐙</span>
+                    <h3 className="font-bold text-white text-sm sm:text-base">GitHub 커밋 & 푸시 (Commit & Push)</h3>
+                  </div>
+                  <button onClick={() => setIsPushModalOpen(false)} className="text-slate-400 hover:text-white p-1">✕</button>
+                </div>
+
+                <div className="p-5 space-y-4 text-xs">
+                  <div>
+                    <label className="text-slate-400 block mb-1 font-semibold">대상 저장소 및 브랜치</label>
+                    <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 font-mono text-slate-300">
+                      {githubRepo || '(설정에서 저장소 지정 필요)'} ({githubBranch})
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1 font-semibold">푸시될 파일 경로</label>
+                    <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 font-mono text-emerald-400">
+                      {(githubPathPrefix || 'notes/') + (docTitle || 'document').replace(/[^a-zA-Z0-9가-힣_-]/g, '_') + '.md'}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1 font-semibold">커밋 메시지 (Commit Message)</label>
+                    <input
+                      type="text"
+                      value={githubCommitMsg}
+                      onChange={(e) => setGithubCommitMsg(e.target.value)}
+                      placeholder={'Docs: Update ' + docTitle + ' via Ollama Say'}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-slate-200 outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="p-4 bg-slate-950 border-t border-slate-800 flex justify-end gap-2">
+                  <button
+                    onClick={() => setIsPushModalOpen(false)}
+                    className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+                  >
+                    취소
+                  </button>
+                  <button
+                    onClick={handlePushToGitHub}
+                    disabled={isPushingGithub || !githubToken || !githubRepo}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md transition-all"
+                  >
+                    {isPushingGithub ? '푸시 중...' : '🚀 GitHub에 커밋 & 푸시'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {isSettingsOpen && (
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
+                <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">⚙️</span>
+                    <h3 className="font-bold text-slate-100 text-sm sm:text-base">환경설정, GitHub 연동 & 프롬프트 제어</h3>
+                  </div>
+                  <button onClick={() => setIsSettingsOpen(false)} className="text-slate-400 hover:text-white p-1">✕</button>
+                </div>
+
+                <div className="p-5 overflow-y-auto space-y-6 text-xs text-slate-300 scrollbar-thin">
+                  {/* Download Local App Section */}
+                  <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-950/80 to-purple-950/80 border border-indigo-500/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div>
+                      <h4 className="font-bold text-white text-sm flex items-center gap-1.5">
+                        <span>💾</span>
+                        <span>내 PC에 앱 다운로드 (.html 파일)</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                        파일을 내 컴퓨터에 저장한 후 더블 클릭하면 브라우저 보안 제한 없이 로컬 Ollama(<code className="text-amber-300">127.0.0.1:11434</code>)와 즉시 완벽하게 연동됩니다.
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleDownloadSelf}
+                      className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shrink-0 shadow-md transition-all"
+                    >
+                      📥 index.html 다운로드
+                    </button>
+                  </div>
+
+                  {/* 1. GitHub Integration Section */}
+                  <div className="space-y-3 p-3.5 rounded-xl bg-slate-950 border border-slate-800">
+                    <div className="flex items-center justify-between">
+                      <label className="font-bold text-indigo-400 uppercase tracking-wider block text-xs">
+                        🐙 GitHub 저장소 연동 (Commit & Push)
+                      </label>
+                      <button
+                        onClick={saveGitHubSettings}
+                        className="px-2.5 py-1 bg-indigo-600/80 hover:bg-indigo-600 text-white rounded text-[11px] font-semibold"
+                      >
+                        토큰 저장
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div>
+                        <span className="text-[11px] text-slate-400">Personal Access Token (repo 권한 필요)</span>
+                        <input
+                          type="password"
+                          placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                          value={githubToken}
+                          onChange={(e) => setGithubToken(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 font-mono outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div>
+                          <span className="text-[11px] text-slate-400">저장소 (owner/repo)</span>
+                          <input
+                            type="text"
+                            placeholder="username/my-notes"
+                            value={githubRepo}
+                            onChange={(e) => setGithubRepo(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <span className="text-[11px] text-slate-400">브랜치 (기본: main)</span>
+                          <input
+                            type="text"
+                            placeholder="main"
+                            value={githubBranch}
+                            onChange={(e) => setGithubBranch(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <span className="text-[11px] text-slate-400">폴더 경로 (기본: notes/)</span>
+                          <input
+                            type="text"
+                            placeholder="notes/"
+                            value={githubPathPrefix}
+                            onChange={(e) => setGithubPathPrefix(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 2. Ollama Endpoints */}
+                  <div className="space-y-3">
+                    <label className="font-bold text-slate-200 uppercase tracking-wider block text-xs">
+                      2. Ollama 서버 연결 엔드포인트
+                    </label>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => { setEndpointType('local'); setIsDemoMode(false); }}
+                        className={'p-3 rounded-xl border text-left transition-all ' + (
+                          endpointType === 'local' && !isDemoMode ? 'bg-indigo-950/60 border-indigo-500/50 text-indigo-200' : 'bg-slate-950/50 border-slate-800 text-slate-400'
+                        )}
+                      >
+                        <div className="font-semibold text-white">🖥️ 로컬 PC 기본</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">http://127.0.0.1:11434</div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => { setEndpointType('online'); setIsDemoMode(false); }}
+                        className={'p-3 rounded-xl border text-left transition-all ' + (
+                          endpointType === 'online' && !isDemoMode ? 'bg-indigo-950/60 border-indigo-500/50 text-indigo-200' : 'bg-slate-950/50 border-slate-800 text-slate-400'
+                        )}
+                      >
+                        <div className="font-semibold text-white">🌐 원격 / Docker / 온라인</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">커스텀 URL 직접 지정</div>
+                      </button>
+                    </div>
+
+                    {!isDemoMode && (
+                      endpointType === 'local' ? (
+                        <input
+                          type="text"
+                          value={localUrl}
+                          onChange={(e) => setLocalUrl(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono outline-none focus:border-indigo-500"
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          value={onlineUrl}
+                          onChange={(e) => setOnlineUrl(e.target.value)}
+                          placeholder="https://ollama.your-domain.com 또는 http://192.168.0.10:11434"
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono outline-none focus:border-indigo-500"
+                        />
+                      )
+                    )}
+
+                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                      <span className="font-semibold text-white">✨ 시뮬레이터 모드 (서버 미실행 시 테스트)</span>
+                      <input
+                        type="checkbox"
+                        checked={isDemoMode}
+                        onChange={(e) => setIsDemoMode(e.target.checked)}
+                        className="w-4 h-4 accent-indigo-500 rounded cursor-pointer"
+                      />
+                    </div>
+                  </div>
+
+                  {/* 3. System Prompts Control */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="font-bold text-slate-200 uppercase tracking-wider text-xs">
+                        3. 모드별 시스템 프롬프트 (System Prompt) 제어
+                      </label>
+                      <button
+                        onClick={() => setCustomPrompts(DEFAULT_PROMPTS)}
+                        className="text-[11px] text-indigo-400 hover:text-indigo-300 underline"
+                      >
+                        기본값으로 초기화
+                      </button>
+                    </div>
+
+                    {Object.values(MODES).map((mode) => (
+                      <div key={mode.id} className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+                        <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
+                          <span>{mode.icon} {mode.name} 모드 프롬프트</span>
+                        </div>
+                        <textarea
+                          rows={3}
+                          value={customPrompts[mode.id] || ''}
+                          onChange={(e) => setCustomPrompts({ ...customPrompts, [mode.id]: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 font-mono outline-none focus:border-indigo-500 resize-none leading-relaxed"
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* 4. Generation Temperature */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-slate-200">4. 생성 다양성 (Temperature): {temperature}</span>
+                      <span className="text-slate-500">0.0 (정밀) ~ 1.0 (창의적)</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.0"
+                      max="1.0"
+                      step="0.1"
+                      value={temperature}
+                      onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                      className="w-full accent-indigo-500 bg-slate-800 h-1.5 rounded-lg cursor-pointer"
+                    />
+                  </div>
+                </div>
+
+                <div className="p-4 bg-slate-950/80 border-t border-slate-800 flex justify-end gap-2">
+                  <button
+                    onClick={() => {
+                      saveGitHubSettings();
+                      fetchOllamaModels(activeUrl);
+                      setIsSettingsOpen(false);
+                      showToast('환경설정이 저장되었습니다.', 'success');
+                    }}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-colors shadow-md"
+                  >
+                    저장 및 적용
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

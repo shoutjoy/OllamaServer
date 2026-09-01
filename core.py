@@ -32,6 +32,12 @@ def model_name(value):
     return value
 
 
+def models_directory():
+    """Match the model location configured in this app's environment."""
+    configured = os.environ.get('OLLAMA_MODELS', '').strip().strip('"')
+    return Path(configured).expanduser().resolve() if configured else Path.home() / '.ollama' / 'models'
+
+
 def open_url(url, data=None, timeout=30):
     body = None if data is None else json.dumps(data).encode('utf-8')
     req = urllib.request.Request(url, body, headers={
