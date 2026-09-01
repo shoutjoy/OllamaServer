@@ -4,7 +4,9 @@ import os
 import platform
 import queue
 import shlex
+import socket
 import subprocess
+import sys
 import threading
 import time
 import tkinter as tk
@@ -19,20 +21,34 @@ from console_runner import ANSI, ConsoleRunner
 from installer_download import DownloadCancelled, download_installer
 from install_commands import COMMANDS, install_args
 from install_terminal import InstallTerminalRunner
+from CHAT.serve_ollama_say import create_server as create_chat_server
 
-DATA = Path(__file__).resolve().parent / '.data'
+SOURCE_ROOT = Path(__file__).resolve().parent
+RESOURCE_ROOT = Path(getattr(sys, '_MEIPASS', SOURCE_ROOT))
+DATA = ((Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'OllamaDesk')
+        if getattr(sys, 'frozen', False) else SOURCE_ROOT / '.data')
+MDPRO_URL = 'https://mdproviewer.vercel.app/'
 
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title('Ollama Desk · 로컬 AI 매니저')
-        self.geometry('1080x780')
-        self.minsize(840, 650)
+        icon_path = RESOURCE_ROOT / 'Icon' / 'Ollama.png'
+        if icon_path.is_file():
+            try:
+                self.app_icon = tk.PhotoImage(file=icon_path)
+                self.iconphoto(True, self.app_icon)
+            except tk.TclError:
+                self.app_icon = None
+        self.geometry('1380x780')
+        self.minsize(1100, 650)
         self.configure(bg='#f3f5f9')
         self.events = queue.Queue()
         self.client = Client()
         self.process = None
+        self.chat_process = None
+        self.chat_server = None
         self.console_runner = ConsoleRunner()
         self.install_terminal_active = False
         self.command_history = []
@@ -72,8 +88,31 @@ class App(tk.Tk):
         style.configure('TButton', padding=(12, 7))
         style.configure('Title.TLabel', font=('맑은 고딕', 23, 'bold'))
         style.configure('Treeview', rowheight=32)
-        outer = ttk.Frame(self, padding=22)
-        outer.pack(fill='both', expand=True)
+        shell = tk.Frame(self, bg='#f3f5f9')
+        shell.pack(fill='both', expand=True)
+
+        # Keep the brand visible beside the workspace, matching the desktop
+        # layout while leaving all controls in the main panel on the right.
+        brand = tk.Frame(shell, width=255, bg='#ffffff', highlightthickness=0)
+        brand.pack(side='left', fill='y')
+        brand.pack_propagate(False)
+        brand_icon_path = RESOURCE_ROOT / 'Icon' / 'Ollama-sidebar.png'
+        if brand_icon_path.is_file():
+            try:
+                self.brand_icon = tk.PhotoImage(file=brand_icon_path)
+                tk.Label(brand, image=self.brand_icon, bg='#ffffff', borderwidth=0).pack(
+                    anchor='n', pady=(62, 0), padx=9)
+            except tk.TclError:
+                self.brand_icon = None
+        tk.Label(
+            brand,
+            text='제작: 박중희 (연세대 인지공학 박사,\n심리학과 겸임교수)\nshoutjoy1@yonsei.ac.kr',
+            bg='#ffffff', fg='#334155', font=('맑은 고딕', 9),
+            justify='center', wraplength=235,
+        ).pack(anchor='n', pady=(18, 0), padx=10)
+
+        outer = ttk.Frame(shell, padding=22)
+        outer.pack(side='left', fill='both', expand=True)
         ttk.Label(outer, text='Ollama Desk', style='Title.TLabel').pack(anchor='w')
         ttk.Label(outer, text='설치부터 모델 탐색, 로컬 대화까지 한 곳에서').pack(anchor='w', pady=(2, 15))
         server = ttk.LabelFrame(outer, text='로컬 서버 · 127.0.0.1:11434', padding=12)
@@ -84,7 +123,8 @@ class App(tk.Tk):
         self.server_status_label = ttk.Label(server, textvariable=self.status)
         self.server_status_label.pack(side='left', padx=(0, 14))
         for label, command in [('서버 시작', self.start_server), ('서버 정지', self.stop_server),
-                               ('새로고침', self.refresh), ('챗 열기', self.open_chat)]:
+                               ('새로고침', self.refresh), ('챗 열기', self.open_chat),
+                               ('MDpro', self.open_mdpro)]:
             ttk.Button(server, text=label, command=command).pack(side='left', padx=3)
         self.install_nav_button = ttk.Button(server, text='Ollama 설치', command=self.show_install_tab)
         self.install_nav_button.pack(side='right', padx=3)
@@ -337,15 +377,34 @@ class App(tk.Tk):
         self.job('console', work, quiet=True)
 
     def open_chat(self):
-        path = Path(__file__).resolve().parent / 'CHAT' / 'ollama-say.html'
+        url = 'http://127.0.0.1:8767'
         try:
-            if not path.is_file():
-                raise FileNotFoundError(f'챗 파일을 찾을 수 없습니다.\n{path}')
-            if not webbrowser.open(path.as_uri(), new=2):
+            try:
+                with socket.create_connection(('127.0.0.1', 8767), timeout=0.3):
+                    pass
+            except OSError:
+                self.chat_server = create_chat_server()
+                threading.Thread(target=self.chat_server.serve_forever, daemon=True).start()
+                for _ in range(30):
+                    try:
+                        with socket.create_connection(('127.0.0.1', 8767), timeout=0.2):
+                            break
+                    except OSError:
+                        time.sleep(0.1)
+                else:
+                    raise RuntimeError('챗 서버 시작 시간이 초과되었습니다.')
+
+            if not webbrowser.open(url, new=2):
                 raise RuntimeError('기본 브라우저를 열지 못했습니다.')
-            self.log(f'챗 열기: {path}')
+            self.log(f'챗 열기: {url}')
         except (OSError, RuntimeError) as exc:
             messagebox.showerror('챗 열기', str(exc), parent=self)
+
+    def open_mdpro(self):
+        if webbrowser.open(MDPRO_URL, new=2):
+            self.log(f'MDpro 열기: {MDPRO_URL}')
+        else:
+            messagebox.showerror('MDpro', '기본 브라우저를 열지 못했습니다.', parent=self)
 
     def emit(self, callback, *args):
         self.events.put((callback, args))
@@ -611,7 +670,9 @@ class App(tk.Tk):
             except Exception:
                 pass
             DATA.mkdir(exist_ok=True)
-            env = dict(os.environ, OLLAMA_HOST='127.0.0.1:11434')
+            # The server only listens on loopback. Allow browser-based chat UIs
+            # served from any local origin to call the Ollama API directly.
+            env = dict(os.environ, OLLAMA_HOST='127.0.0.1:11434', OLLAMA_ORIGINS='*')
             with (DATA / 'server.log').open('ab') as output:
                 offset = output.tell()
                 self.process = subprocess.Popen([exe, 'serve'], env=env, stdout=output,
@@ -672,6 +733,10 @@ class App(tk.Tk):
 
     def stop_installer_download(self):
         self.installer_cancel.set()
+        if self.chat_server is not None:
+            self.chat_server.shutdown()
+            self.chat_server.server_close()
+            self.chat_server = None
         self.stop_download_button.configure(state='disabled')
         self.download_status.set('다운로드 중지 중… 네트워크 응답 대기 시 약 10초 걸릴 수 있습니다.')
 

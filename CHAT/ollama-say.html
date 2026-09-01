@@ -90,6 +90,22 @@
     .editor-panes.split>.editor-preview{border-left:1px solid #334155}
     .workspace-rail{width:38px;flex-shrink:0;display:flex;align-items:flex-start;justify-content:center;background:#111b2e;border-right:1px solid #334155;padding:12px 0}
     .workspace-rail button{writing-mode:vertical-rl;padding:12px 8px;border-radius:7px;background:#24324a;color:#c7d2fe;font-size:12px;letter-spacing:2px}
+    .theme-toggle{min-width:34px;padding:7px;border-radius:8px;background:#24324a;color:#e2e8f0;font-size:14px;line-height:1}
+    html.light{color-scheme:light}html.dark{color-scheme:dark}
+    html.light .chat-shell,html.light .bg-slate-950{background:#f1f5f9!important;color:#172033!important}
+    html.light aside,html.light .bg-slate-900,html.light .bg-slate-900\/40,html.light .bg-slate-900\/50,html.light .bg-slate-900\/60{background:#fff!important;color:#172033!important}
+    html.light .bg-slate-950\/70,html.light .bg-slate-950\/60,html.light .bg-slate-800,html.light .bg-slate-800\/80{background:#e8eef7!important;color:#172033!important}
+    html.light .text-slate-100,html.light .text-slate-200,html.light .text-slate-300,html.light .text-white{color:#172033!important}
+    html.light .text-slate-400,html.light .text-slate-500{color:#52647d!important}
+    html.light .border-slate-800,html.light .border-slate-800\/80,html.light .border-slate-700,html.light .border-slate-700\/60{border-color:#cbd5e1!important}
+    html.light .editor-panel,html.light .workspace-rail{background:#f8fafc;border-color:#cbd5e1;color:#172033}
+    html.light .editor-toolbar{border-color:#d7e0ec}html.light .editor-toolbar button,html.light .workspace-rail button,html.light .theme-toggle{background:#dbe5f2;color:#172033}
+    html.light .editor-toolbar button[aria-pressed=true]{background:#4f46e5;color:#fff}
+    html.light .editor-toolbar input:not([type=file]),html.light .editor-toolbar select{background:#fff;border-color:#b8c5d6;color:#172033}
+    html.light .document-list{border-color:#cbd5e1}html.light .document-list-items button{background:#e8eef7;color:#172033}html.light .document-list-items button[aria-current]{background:#ddd6fe;border-color:#7c3aed}
+    html.light .source-editor{background:#f8fafc}html.light .source-editor pre{color:#24324a}html.light .editor-panes .source-editor textarea{caret-color:#172033}
+    html.light .editor-preview{background:#fff;color:#172033}html.light .editor-panes.split>.editor-preview{border-color:#cbd5e1}
+    html.dark .editor-preview{background:#111827;color:#e5e7eb}html.dark .mermaid-diagram{background:#0f172a}
     @media(max-width:700px){.workspace-rail{width:100%;padding:6px;justify-content:flex-start}.workspace-rail button{writing-mode:horizontal-tb;padding:6px 12px;letter-spacing:normal}}
   </style>
   <style>
@@ -98,6 +114,13 @@
     .chat-main{min-height:0;min-width:0}
     .chat-messages{min-height:0;overscroll-behavior:contain;overflow-anchor:none}
     .chat-composer{position:relative;z-index:1}
+    .developer-logs{height:220px;flex-shrink:0;border-top:1px solid #334155;background:#080d16;display:flex;flex-direction:column;font:12px/1.55 'JetBrains Mono',Consolas,monospace}
+    .developer-logs header{height:auto;min-height:38px;padding:7px 12px;background:#111827;border-bottom:1px solid #273449;display:flex;align-items:center;justify-content:space-between}
+    .developer-logs-output{overflow:auto;flex:1;padding:8px 12px;user-select:text;white-space:pre-wrap;overflow-wrap:anywhere}
+    .developer-log-row{display:grid;grid-template-columns:max-content 64px minmax(0,1fr);gap:9px;color:#b8c0cc}
+    .developer-log-row .time{color:#64748b}.developer-log-row.info .level{color:#22c55e}.developer-log-row.debug .level{color:#3b82f6}.developer-log-row.warn .level{color:#f59e0b}.developer-log-row.error .level{color:#f43f5e}
+    .developer-logs button{padding:3px 8px;border:1px solid #334155;border-radius:5px;color:#cbd5e1;background:#172033}
+    .developer-logs-restore{position:absolute;right:14px;bottom:132px;z-index:20;padding:7px 11px;border:1px solid #3b82f680;border-radius:8px;background:#172554;color:#93c5fd;font:600 11px 'JetBrains Mono',Consolas,monospace;box-shadow:0 8px 24px #0008}
     @media(max-width:700px){
       #root>.chat-shell>.chat-main{height:auto;min-height:0;flex:1 1 0!important}
       #root>.chat-shell>.editor-panel{height:40%;min-height:0;flex-shrink:0}
@@ -364,7 +387,24 @@
       },renderer(t){return '<strong>'+this.parser.parseInline(t.tokens)+'</strong>';}}
     ]});
 
-    mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'neutral',flowchart:{htmlLabels:false},fontFamily:'sans-serif'});
+    const mermaidConfig=theme=>({startOnLoad:false,securityLevel:'strict',theme:theme==='dark'?'dark':'neutral',flowchart:{htmlLabels:false},fontFamily:'sans-serif'});
+    mermaid.initialize(mermaidConfig('dark'));
+    function normalizeMermaidSource(source){
+      const quote=label=>{
+        const value=label.trim();
+        if(!value||(/^"[\s\S]*"$/).test(value))return label;
+        return '"'+value.replace(/"/g,'&quot;')+'"';
+      };
+      // Quote flowchart labels before Mermaid parses punctuation such as (), /, :, or Korean text.
+      // Compound shapes run first so their inner brackets are not mistaken for a normal node.
+      return String(source)
+        .replace(/(\b[A-Za-z_][\w-]*)(\[\[)([^\n]*?)(\]\])/g,(all,id,open,label,close)=>id+open+quote(label)+close)
+        .replace(/(\b[A-Za-z_][\w-]*)(\[\()(.*?)(\)\])/g,(all,id,open,label,close)=>id+open+quote(label)+close)
+        .replace(/(\b[A-Za-z_][\w-]*)(\(\[)([^\n]*?)(\]\))/g,(all,id,open,label,close)=>id+open+quote(label)+close)
+        .replace(/(\b[A-Za-z_][\w-]*)(\{\{)([^\n]*?)(\}\})/g,(all,id,open,label,close)=>id+open+quote(label)+close)
+        .replace(/(\b[A-Za-z_][\w-]*)(\[(?!\[|\())([^\]\n]*?)(\])/g,(all,id,open,label,close)=>id+open+quote(label)+close)
+        .replace(/(\b[A-Za-z_][\w-]*)(\{(?!\{))([^}\n]*?)(\})/g,(all,id,open,label,close)=>id+open+quote(label)+close);
+    }
     let diagramQueue=Promise.resolve(),diagramId=0;
     const diagramCache=new Map();
     marked.use({renderer:{code({text,lang}){
@@ -373,26 +413,27 @@
       const code=window.hljs && hljs.getLanguage(language)?hljs.highlight(text,{language}).value:escapeHtml(text);
       return '<pre class="code-block"><small>'+escapeHtml(language||'code')+'</small><code class="hljs">'+code+'</code></pre>';
     }}});
-    async function richMarkdownHtml(text){
+    async function richMarkdownHtml(text,theme='dark'){
       const container=document.createElement('div');container.innerHTML=markdownHtml(text);
       for(const node of container.querySelectorAll('.mermaid-source')){
         const source=node.textContent;
         try{
-          let svg=diagramCache.get(source);
+          const cacheKey=theme+'\n'+source;
+          let svg=diagramCache.get(cacheKey);
           if(!svg){
             const job=diagramQueue.catch(()=>{}).then(async()=>{
               const id='say-diagram-'+(++diagramId);
-              try{return (await mermaid.render(id,source)).svg;}
+              try{mermaid.initialize(mermaidConfig(theme));return (await mermaid.render(id,normalizeMermaidSource(source))).svg;}
               finally{document.getElementById(id)?.remove();document.getElementById('d'+id)?.remove();}
             });
             diagramQueue=job;svg=await job;
-            if(diagramCache.size>80)diagramCache.clear();diagramCache.set(source,svg);
+            if(diagramCache.size>80)diagramCache.clear();diagramCache.set(cacheKey,svg);
           }
           const figure=document.createElement('figure');figure.className='mermaid-diagram';
           figure.innerHTML=DOMPurify.sanitize(svg,{USE_PROFILES:{svg:true,svgFilters:true}});
           node.replaceWith(figure);
-        }catch{
-          const hint=document.createElement('div');hint.className='diagram-error';hint.textContent='Mermaid 문법을 확인하세요. (작성 중에는 소스를 표시합니다.)';node.before(hint);
+        }catch(error){
+          const hint=document.createElement('div');hint.className='diagram-error';hint.textContent='Mermaid 렌더링 실패: '+(error?.message||'문법을 확인하세요.');node.before(hint);
         }
       }
       return container.innerHTML;
@@ -500,7 +541,7 @@
     }
 
     const markdownHtml = text => DOMPurify.sanitize(marked.parse(text || '',{breaks:true,gfm:true}),{ADD_TAGS:['annotation'],ADD_ATTR:['encoding']});
-    function Markdown({text,renderDiagrams=true}) {
+    function Markdown({text,renderDiagrams=true,theme='dark'}) {
       const [html,setHtml]=useState(()=>markdownHtml(text));
       useEffect(()=>{
         let cancelled=false;
@@ -508,10 +549,10 @@
         // A paused stream is not a completed answer: never parse partial diagrams.
         if(!renderDiagrams)return;
         const timer=setTimeout(()=>{
-          richMarkdownHtml(text).then(value=>{if(!cancelled)setHtml(value);}).catch(()=>{});
+          (theme==='dark'?richMarkdownHtml(text):richMarkdownHtml(text,theme)).then(value=>{if(!cancelled)setHtml(value);}).catch(()=>{});
         },180);
         return()=>{cancelled=true;clearTimeout(timer);};
-      },[text,renderDiagrams]);
+      },[text,renderDiagrams,theme]);
       return <div className="md-content" dangerouslySetInnerHTML={{__html:html}}/>;
     }
     function downloadFile(name, content, type='text/markdown;charset=utf-8'){
@@ -588,7 +629,7 @@
         throw Error('저장된 대화 형식을 확인할 수 없습니다. 기존 데이터는 유지됩니다.');
       return {...saved,currentSessionId:saved.sessions.some(s=>s.id===saved.currentSessionId)?saved.currentSessionId:saved.sessions[0].id};
     }
-    function EditorPanel({insertRef,notify,github,isOpen,onOpen,onClose}){
+    function EditorPanel({insertRef,notify,github,isOpen,onOpen,onClose,theme}){
       const [doc,setDoc]=useState({id:'draft',title:'새 문서',text:''});
       const [ready,setReady]=useState(false),[status,setStatus]=useState('불러오는 중…'),[view,setView]=useState('split');
       const [documents,setDocuments]=useState([]),[filter,setFilter]=useState(''),[busy,setBusy]=useState(false);
@@ -678,7 +719,7 @@
             onChange={e=>change({...doc,text:e.target.value})}
             onKeyDown={e=>{if((e.ctrlKey||e.metaKey)&&!e.nativeEvent.isComposing&&['z','y','s'].includes(e.key.toLowerCase())){e.preventDefault();if(e.key.toLowerCase()==='s')persist(live.current).catch(()=>{});else undo(e.key.toLowerCase()==='y'||e.shiftKey);}}}/>
           </div>}
-          {view!=='md'&&<div className="editor-preview"><Markdown text={doc.text}/></div>}
+          {view!=='md'&&<div className="editor-preview"><Markdown text={doc.text} theme={theme}/></div>}
         </div>
       </section>;
     }
@@ -686,6 +727,8 @@
     function App() {
       const insertRef=useRef(null);
       const [isWorkspaceOpen,setIsWorkspaceOpen]=useState(false);
+      const [theme,setTheme]=useState(()=>{try{return localStorage.getItem('ollama-say-theme')||'dark';}catch{return 'dark';}});
+      useEffect(()=>{document.documentElement.classList.toggle('dark',theme==='dark');document.documentElement.classList.toggle('light',theme==='light');try{localStorage.setItem('ollama-say-theme',theme);}catch{}},[theme]);
       const [github,setGithub]=useState(loadGitHubConfig),[githubStatus,setGithubStatus]=useState('연결 전'),[githubChecking,setGithubChecking]=useState(false);
       const updateGithub=(key,value)=>{setGithub(prev=>{const next={...prev,[key]:value};try{localStorage.setItem('ollama-say-github',JSON.stringify({repo:next.repo,branch:next.branch}));}catch{}return next;});setGithubStatus('연결 전');};
       const [showThinking,setShowThinking]=useState(false),[sourceViews,setSourceViews]=useState({});
@@ -693,7 +736,7 @@
       const updateSystemPrompt=value=>{setSystemPrompt(value);try{localStorage.setItem('ollama-say-system-prompt',value);}catch{showToast('설정을 저장할 수 없습니다.');}};
       // Server Connection States
       const [endpointType, setEndpointType] = useState('local'); // 'local' | 'online'
-      const [localUrl, setLocalUrl] = useState(location.protocol.startsWith('http') && location.port==='8767' ? location.origin+'/ollama' : 'http://127.0.0.1:11434');
+      const [localUrl, setLocalUrl] = useState('http://127.0.0.1:11434');
       const [onlineUrl, setOnlineUrl] = useState('');
       const [activeUrl, setActiveUrl] = useState('http://127.0.0.1:11434');
 
@@ -723,6 +766,17 @@
       const [activeResponseId, setActiveResponseId] = useState(null);
       const [searchStatus, setSearchStatus] = useState(null);
       const [notification, setNotification] = useState(null);
+      const [showDeveloperLogs,setShowDeveloperLogs]=useState(()=>{try{return localStorage.getItem('ollama-say-developer-logs')!=='off';}catch{return true;}}),[developerLogs,setDeveloperLogs]=useState([]);
+      const developerLogsEndRef=useRef(null);
+      const updateDeveloperLogsVisibility=value=>{setShowDeveloperLogs(value);try{localStorage.setItem('ollama-say-developer-logs',value?'on':'off');}catch{}};
+      const addDeveloperLog=(level,message,detail='')=>{
+        const normalized=['debug','info','warn','error'].includes(level)?level:'info';
+        const row={id:crypto.randomUUID(),time:new Date().toLocaleTimeString('ko-KR',{hour12:false}),level:normalized,message:String(message),detail:detail?String(detail):''};
+        setDeveloperLogs(prev=>[...prev.slice(-499),row]);
+        const method=normalized==='debug'?'debug':normalized==='warn'?'warn':normalized==='error'?'error':'info';
+        console[method](`[Ollama Say] [${normalized.toUpperCase()}] ${row.message}`,row.detail||'');
+      };
+      useEffect(()=>{if(showDeveloperLogs)developerLogsEndRef.current?.scrollIntoView({block:'end'});},[developerLogs,showDeveloperLogs]);
       const [chatReady,setChatReady] = useState(false);
       const [chatStorageStatus,setChatStorageStatus] = useState('대화 불러오는 중…');
       const chatDBRef=useRef(null),chatSaveTimer=useRef(null),chatSaveVersion=useRef(0);
@@ -925,6 +979,9 @@
         setInputText('');
 
         const targetModel = selectedModel || customModelInput.trim() || 'llama3';
+        const generationStartedAt=Date.now();
+        let receivedEvents=0,receivedCharacters=0,completionLogged=false;
+        if(typeof addDeveloperLog==='function')addDeveloperLog('info','생성 요청 시작',`model=${targetModel} · mode=${activeMode}`);
         const currentModeConfig = MODES[activeMode.toUpperCase()];
         
         const userMsg = {
@@ -1020,6 +1077,8 @@ URL: ${w.url}
               webData || [],
               (chunk) => {
                 accumulated += chunk;
+                receivedEvents += 1;receivedCharacters += chunk.length;
+                if(typeof addDeveloperLog==='function')addDeveloperLog('debug',`시뮬레이션 토큰 #${receivedEvents}`,`${JSON.stringify(chunk)} · 누적 ${receivedCharacters}자`);
                 setSessions(prev => {
                   const copy = [...prev];
                   const curIdx = copy.findIndex(s => s.id === currentSessionId);
@@ -1032,8 +1091,10 @@ URL: ${w.url}
               },
               controller.signal
             );
+            completionLogged=true;
+            if(typeof addDeveloperLog==='function')addDeveloperLog('info','시뮬레이션 응답 완료',`${receivedEvents}개 이벤트 · ${receivedCharacters}자 · ${((Date.now()-generationStartedAt)/1000).toFixed(2)}초`);
           } catch (err) {
-            console.log('Stream ended.');
+            if(typeof addDeveloperLog==='function')addDeveloperLog(controller.signal.aborted?'warn':'error',controller.signal.aborted?'응답 생성 중단':'시뮬레이션 오류',err.message||'Stream ended.');
           }
           return;
         }
@@ -1069,6 +1130,7 @@ URL: ${w.url}
           if (!response.ok) {
             throw new Error(`Ollama 서버 응답 에러 (HTTP ${response.status})`);
           }
+          if(typeof addDeveloperLog==='function')addDeveloperLog('info','Ollama 스트림 연결됨',`HTTP ${response.status||200} · ${sanitizedUrl}/api/chat`);
 
           setSearchStatus(null);
           const reader = response.body.getReader();
@@ -1086,17 +1148,28 @@ URL: ${w.url}
               let parsed;try{parsed=JSON.parse(line);}catch{throw Error('Ollama 스트림 JSON 형식 오류');}
               if(parsed.error)throw Error(parsed.error);
               if(parsed.message?.content || parsed.message?.thinking){
+                receivedEvents += 1;
+                const tokenText=(parsed.message.content||'')+(parsed.message.thinking||'');
+                receivedCharacters += tokenText.length;
+                if(typeof addDeveloperLog==='function')addDeveloperLog('debug',`토큰 이벤트 #${receivedEvents}`,`${JSON.stringify(tokenText)} · 누적 ${receivedCharacters}자`);
                 accumulatedText += parsed.message.content||'';
                 accumulatedThinking += parsed.message.thinking||'';
                 const content=accumulatedText,thinking=accumulatedThinking;
                 setSessions(prev=>prev.map(session=>session.id!==currentSessionId?session:{...session,messages:session.messages.map(message=>message.id===assistantMsg.id?{...message,content,thinking}:message)}));
+              }
+              if(parsed.done){
+                completionLogged=true;
+                const elapsed=((Date.now()-generationStartedAt)/1000).toFixed(2);
+                const evalCount=parsed.eval_count==null?receivedEvents:parsed.eval_count;
+                const rate=parsed.eval_duration&&parsed.eval_count?(parsed.eval_count/(parsed.eval_duration/1e9)).toFixed(2):'측정 불가';
+                if(typeof addDeveloperLog==='function')addDeveloperLog('info','응답 완료',`생성 토큰 ${evalCount} · 프롬프트 토큰 ${parsed.prompt_eval_count??'미제공'} · ${rate} token/s · ${elapsed}초`);
               }
             }
             if(done)break;
           }
         } catch (err) {
           if (!controller.signal.aborted && err.name !== 'AbortError') {
-            console.error('Generation failed:', err);
+            if(typeof addDeveloperLog==='function')addDeveloperLog('error','응답 생성 실패',err.message);
             setSessions(prev => {
               const copy = [...prev];
               const curIdx = copy.findIndex(s => s.id === currentSessionId);
@@ -1109,6 +1182,8 @@ URL: ${w.url}
             });
           }
         } finally {
+          if(controller.signal.aborted&&typeof addDeveloperLog==='function')addDeveloperLog('warn','응답 생성 중단',`${receivedEvents}개 이벤트 · ${receivedCharacters}자 유지`);
+          else if(!completionLogged&&receivedEvents&&typeof addDeveloperLog==='function')addDeveloperLog('info','스트림 종료',`${receivedEvents}개 이벤트 · ${receivedCharacters}자 · 완료 통계 미제공`);
           if (abortControllerRef.current === controller) {
             setActiveResponseId(null);
             setIsGenerating(false);
@@ -1181,6 +1256,8 @@ URL: ${w.url}
                   <p className="text-[11px] text-slate-400 font-medium">Local & Online AI Chat</p>
                 </div>
               </div>
+              <div className="flex items-center gap-1">
+              <button type="button" className="theme-toggle" onClick={()=>setTheme(value=>value==='dark'?'light':'dark')} title={theme==='dark'?'라이트 모드로 전환':'다크 모드로 전환'} aria-label={theme==='dark'?'라이트 모드로 전환':'다크 모드로 전환'}>{theme==='dark'?'☀️':'🌙'}</button>
               <button 
                 onClick={handleNewChat}
                 className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors text-lg"
@@ -1188,6 +1265,7 @@ URL: ${w.url}
               >
                 ＋
               </button>
+              </div>
             </div>
 
             {/* Server Connection Status Banner */}
@@ -1282,7 +1360,7 @@ URL: ${w.url}
           </aside>
 
           {!isWorkspaceOpen&&<div className="workspace-rail"><button type="button" aria-label="문서 작업실 열기" aria-controls="document-workspace" aria-expanded={isWorkspaceOpen} onClick={()=>setIsWorkspaceOpen(true)}>문서 작업실 ›</button></div>}
-          <EditorPanel insertRef={insertRef} notify={showToast} github={github} isOpen={isWorkspaceOpen} onOpen={()=>setIsWorkspaceOpen(true)} onClose={()=>setIsWorkspaceOpen(false)}/>
+          <EditorPanel insertRef={insertRef} notify={showToast} github={github} isOpen={isWorkspaceOpen} onOpen={()=>setIsWorkspaceOpen(true)} onClose={()=>setIsWorkspaceOpen(false)} theme={theme}/>
           {/* MAIN CHAT AREA */}
           <main className="chat-main flex-1 flex flex-col h-full overflow-hidden relative">
             {/* Header */}
@@ -1330,7 +1408,7 @@ URL: ${w.url}
                 </div>
               </div>
 
-              <button className="text-xs bg-slate-800 p-2 rounded-lg" onClick={()=>setIsSettingsOpen(true)}>설정</button>
+              <div className="flex items-center gap-2 shrink-0"><button className={`text-xs p-2 rounded-lg border whitespace-nowrap ${showDeveloperLogs?'bg-blue-950 text-blue-300 border-blue-500/50':'bg-slate-800 border-slate-700'}`} aria-pressed={showDeveloperLogs} onClick={()=>updateDeveloperLogsVisibility(!showDeveloperLogs)}>Dev Logs {showDeveloperLogs?'ON':'OFF'}</button><button className="text-xs bg-slate-800 p-2 rounded-lg shrink-0" onClick={()=>setIsSettingsOpen(true)}>설정</button></div>
             </header>
 
             {/* Warning Banner if connection failed */}
@@ -1497,7 +1575,7 @@ URL: ${w.url}
                         {msg.role==='assistant'&&showThinking&&<div className="thinking-panel" aria-label="실시간 추론"><strong>모델 추론</strong><div>{msg.thinking || (isGenerating?'모델의 추론 스트림을 기다리는 중…':'이 응답에는 모델이 제공한 추론 스트림이 없습니다.')}</div></div>}
                         {/* Content text */}
                         <div className="whitespace-pre-wrap leading-relaxed">
-                          {msg.content ? (sourceViews[msg.id]?<pre className="answer-source">{msg.content}</pre>:<Markdown text={msg.content} renderDiagrams={msg.id!==activeResponseId}/>) : (
+                          {msg.content ? (sourceViews[msg.id]?<pre className="answer-source">{msg.content}</pre>:<Markdown text={msg.content} renderDiagrams={msg.id!==activeResponseId} theme={theme}/>) : (
                             <div className="flex items-center gap-2 text-slate-400 py-1">
                               <span className="animate-spin text-indigo-400">🔄</span>
                               <span>답변을 생성하고 있습니다...</span>
@@ -1544,6 +1622,15 @@ URL: ${w.url}
               )}
 
             </div>
+
+            {showDeveloperLogs&&<section className="developer-logs" aria-label="Developer Logs">
+              <header><strong className="text-blue-300">Developer Logs</strong><div className="flex items-center gap-2"><span className="text-slate-500">{developerLogs.length} events</span><button type="button" onClick={()=>setDeveloperLogs([])}>지우기</button><button type="button" onClick={()=>updateDeveloperLogsVisibility(false)}>닫기</button></div></header>
+              <div className="developer-logs-output" role="log" aria-live="polite">
+                {developerLogs.length===0?<div className="text-slate-500">응답을 전송하면 요청, 토큰 스트림, 속도 및 완료 상태가 여기에 표시됩니다.</div>:developerLogs.map(log=><div key={log.id} className={`developer-log-row ${log.level}`}><span className="time">{log.time}</span><span className="level">[{log.level.toUpperCase()}]</span><span>{log.message}{log.detail&&<span className="text-slate-500"> · {log.detail}</span>}</span></div>)}
+                <div ref={developerLogsEndRef}/>
+              </div>
+            </section>}
+            {!showDeveloperLogs&&<button type="button" className="developer-logs-restore" onClick={()=>updateDeveloperLogsVisibility(true)}>Developer Logs 열기</button>}
 
             {/* Input Bar */}
             <div className="chat-composer p-4 sm:p-5 border-t border-slate-800/80 bg-slate-900/50 backdrop-blur-sm shrink-0">

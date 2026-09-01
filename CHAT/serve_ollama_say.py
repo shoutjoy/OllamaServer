@@ -29,6 +29,11 @@ def list_models():
     return {'models': [{'name': line.split()[0]} for line in result.stdout.splitlines()[1:] if line.strip()]}
 
 class Handler(BaseHTTPRequestHandler):
+    def log_message(self, _format, *args):
+        # pythonw.exe has no stderr; BaseHTTPRequestHandler's default logger
+        # would fail before an HTTP response can be written.
+        pass
+
     def allowed(self):
         hosts = {f'127.0.0.1:{PORT}', f'localhost:{PORT}'}
         origin = self.headers.get('Origin')
@@ -95,11 +100,23 @@ class Handler(BaseHTTPRequestHandler):
             if not started:
                 self.send_data(502, json.dumps({'error': str(exc)}).encode())
 
-if __name__ == '__main__':
-    server = ThreadingHTTPServer(('127.0.0.1', PORT), Handler)
-    print(f'Ollama Say: http://127.0.0.1:{PORT} (Ctrl+C to stop)', flush=True)
-    webbrowser.open(f'http://127.0.0.1:{PORT}')
+def create_server():
+    return ThreadingHTTPServer(('127.0.0.1', PORT), Handler)
+
+
+def serve(open_browser=True):
+    server = create_server()
+    if getattr(os.sys, 'stdout', None) is not None:
+        print(f'Ollama Say: http://127.0.0.1:{PORT} (Ctrl+C to stop)', flush=True)
+    if open_browser and os.environ.get('OLLAMA_SAY_NO_BROWSER') != '1':
+        webbrowser.open(f'http://127.0.0.1:{PORT}')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        pass
+    finally:
         server.server_close()
+
+
+if __name__ == '__main__':
+    serve()

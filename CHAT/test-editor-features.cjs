@@ -47,3 +47,10 @@ test('workspace starts collapsed and remains mounted to preserve editing state',
   assert.match(html,/<EditorPanel[^>]*isOpen=\{isWorkspaceOpen\}/);
   assert.match(html,/insertRef.current=text=>\{[^\n]*onOpen\(\)/);
 });
+test('light and dark themes are persistent and passed to Mermaid previews',()=>{
+  assert.match(html,/localStorage\.getItem\('ollama-say-theme'\)/);
+  assert.match(html,/classList\.toggle\('light',theme==='light'\)/);
+  assert.match(html,/<Markdown text=\{doc\.text\} theme=\{theme\}/);
+  assert.match(html,/theme-toggle/);
+  assert.match(html,/const cacheKey=theme\+'\\n'\+source/);
+});
