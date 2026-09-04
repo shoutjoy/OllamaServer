@@ -11,5 +11,6 @@ test('primary chat connects directly to loopback Ollama API',()=>{
 test('desktop server enables browser origins while remaining loopback-only',()=>{
   const source=fs.readFileSync('app.py','utf8');
   assert.match(source,/OLLAMA_HOST='127\.0\.0\.1:11434'/);
-  assert.match(source,/OLLAMA_ORIGINS='\*'/);
+  assert.match(source,/DEFAULT_CORS_ORIGINS = '\*'/);
+  assert.match(source,/OLLAMA_ORIGINS=origins/);
 });

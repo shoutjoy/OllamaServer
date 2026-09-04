@@ -28,6 +28,8 @@ RESOURCE_ROOT = Path(getattr(sys, '_MEIPASS', SOURCE_ROOT))
 DATA = ((Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'OllamaDesk')
         if getattr(sys, 'frozen', False) else SOURCE_ROOT / '.data')
 MDPRO_URL = 'https://mdproviewer.vercel.app/'
+# Browser chat UIs (챗 열기, MDpro, file:// HTML) need Ollama to allow their Origin.
+DEFAULT_CORS_ORIGINS = '*'
 
 
 class App(tk.Tk):
@@ -66,13 +68,11 @@ class App(tk.Tk):
         self.install_status = tk.StringVar(value='Ollama 설치 확인 중…')
         self.download_status = tk.StringVar(value='설치 파일 다운로드 대기')
         self.selected = tk.StringVar()
+        self.cors_origins = tk.StringVar(value=DEFAULT_CORS_ORIGINS)
         self.target = tk.StringVar(value='gemma3:1b')
         self.query = tk.StringVar()
         self.progress_text = tk.StringVar(value='설치할 모델을 검색하거나 이름:태그를 직접 입력하세요.')
-        try:
-            self.selected.set(json.loads((DATA / 'settings.json').read_text('utf-8')).get('model', ''))
-        except (OSError, ValueError):
-            pass
+        self.load_settings()
         self.build()
         self.protocol('WM_DELETE_WINDOW', self.close)
         self.after(80, self.drain)
@@ -128,6 +128,19 @@ class App(tk.Tk):
             ttk.Button(server, text=label, command=command).pack(side='left', padx=3)
         self.install_nav_button = ttk.Button(server, text='Ollama 설치', command=self.show_install_tab)
         self.install_nav_button.pack(side='right', padx=3)
+        cors = ttk.Frame(outer)
+        cors.pack(fill='x', pady=(8, 0))
+        ttk.Label(cors, text='CORS (OLLAMA_ORIGINS)').pack(side='left', padx=(0, 8))
+        cors_entry = ttk.Entry(cors, textvariable=self.cors_origins)
+        cors_entry.pack(side='left', fill='x', expand=True)
+        cors_entry.bind('<FocusOut>', lambda _: self.save_settings(note_cors=True))
+        cors_entry.bind('<Return>', lambda _: self.save_settings(note_cors=True))
+        ttk.Button(cors, text='모두 허용 (*)', command=self.reset_cors_origins).pack(side='left', padx=(6, 0))
+        ttk.Button(cors, text='저장', command=lambda: self.save_settings(note_cors=True)).pack(side='left', padx=(6, 0))
+        ttk.Label(
+            outer,
+            text='서버 시작 시 적용됩니다. 예: * 또는 http://127.0.0.1:8767,https://mdproviewer.vercel.app',
+        ).pack(anchor='w', pady=(4, 0))
         ttk.Label(outer, textvariable=self.install_status).pack(anchor='w', pady=8)
         folders = ttk.Frame(outer)
         folders.pack(fill='x', pady=(0, 8))
@@ -670,14 +683,15 @@ class App(tk.Tk):
             except Exception:
                 pass
             DATA.mkdir(exist_ok=True)
-            # The server only listens on loopback. Allow browser-based chat UIs
-            # served from any local origin to call the Ollama API directly.
-            env = dict(os.environ, OLLAMA_HOST='127.0.0.1:11434', OLLAMA_ORIGINS='*')
+            # The server only listens on loopback. OLLAMA_ORIGINS controls which
+            # browser Origins may call the API (CORS); default is '*'.
+            origins = self.cors_origins.get().strip() or DEFAULT_CORS_ORIGINS
+            env = dict(os.environ, OLLAMA_HOST='127.0.0.1:11434', OLLAMA_ORIGINS=origins)
             with (DATA / 'server.log').open('ab') as output:
                 offset = output.tell()
                 self.process = subprocess.Popen([exe, 'serve'], env=env, stdout=output,
                                                 stderr=output, creationflags=NO_WINDOW)
-            self.emit(self.console_write, '> ollama serve\n')
+            self.emit(self.console_write, f'> ollama serve\n[CORS] OLLAMA_ORIGINS={origins}\n')
             self.follow_server_log(self.process, offset)
             for _ in range(30):
                 try:
@@ -971,12 +985,40 @@ class App(tk.Tk):
         self.refresh()
         self.log(name + ' 설치 완료')
 
-    def select_model(self, _=None):
-        DATA.mkdir(exist_ok=True)
+    @property
+    def settings_path(self):
+        return DATA / 'settings.json'
+
+    def load_settings(self):
         try:
-            (DATA / 'settings.json').write_text(json.dumps({'model': self.selected.get()}, ensure_ascii=False), 'utf-8')
+            data = json.loads(self.settings_path.read_text('utf-8'))
+        except (OSError, ValueError):
+            return
+        if isinstance(data.get('model'), str):
+            self.selected.set(data['model'])
+        origins = data.get('cors_origins', DEFAULT_CORS_ORIGINS)
+        if isinstance(origins, str) and origins.strip():
+            self.cors_origins.set(origins.strip())
+
+    def save_settings(self, _=None, *, note_cors=False):
+        DATA.mkdir(exist_ok=True)
+        origins = self.cors_origins.get().strip() or DEFAULT_CORS_ORIGINS
+        self.cors_origins.set(origins)
+        payload = {'model': self.selected.get(), 'cors_origins': origins}
+        try:
+            self.settings_path.write_text(json.dumps(payload, ensure_ascii=False), 'utf-8')
         except OSError as exc:
             self.log('설정 저장 실패: ' + str(exc))
+            return
+        if note_cors:
+            self.log(f'CORS 설정 저장: OLLAMA_ORIGINS={origins}')
+
+    def reset_cors_origins(self):
+        self.cors_origins.set(DEFAULT_CORS_ORIGINS)
+        self.save_settings(note_cors=True)
+
+    def select_model(self, _=None):
+        self.save_settings()
         if self.selected.get():
             self.access_log('모델 선택', self.selected.get())
         self.clear_chat()
