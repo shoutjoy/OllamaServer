@@ -8,6 +8,8 @@ Python 표준 라이브러리와 Tkinter로 만든 한국어 Windows Ollama 관�
 
 **[Ollama_Park.exe 바로 다운로드](https://raw.githubusercontent.com/shoutjoy/OllamaServer/main/Ollama_Park.exe)**
 
+**[OllamaDesk Mac.dmg 다운로드](https://github.com/shoutjoy/OllamaServer/releases/download/mac-1.0/OllamaDesk-macOS.dmg)**
+
 소스에서 실행하려면 Python 3.10 이상(Tkinter 포함)으로:
 
 ```powershell
