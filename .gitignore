@@ -2,3 +2,7 @@ __pycache__/
 .data/
 *.pyc
 search_sample.html
+build/
+dist/
+.venv/
+.DS_Store

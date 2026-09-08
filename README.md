@@ -20,6 +20,19 @@ python app.py
 
 상단의 **MDpro** 버튼은 브라우저에서 [MDpro Viewer](https://mdproviewer.vercel.app/)를 엽니다.
 
+## macOS 앱 / DMG 배포
+
+macOS에서는 Python이 설치되지 않은 다른 Mac에서도 실행할 수 있도록 PyInstaller로 `.app`과 `.dmg`를 만들 수 있습니다. 빌드는 대상 Mac의 CPU 아키텍처에서 직접 실행하세요. Apple Silicon(`arm64`)과 Intel(`x86_64`)은 각각 별도로 빌드해야 하며, 한 번의 빌드만으로 두 아키텍처를 모두 지원하지는 않습니다.
+
+```bash
+python3 -m pip install pyinstaller
+./packaging/build_macos.sh
+```
+
+결과물은 `dist/OllamaDesk.app`과 `dist/OllamaDesk-macOS.dmg`입니다. 스크립트는 `Icon`과 `CHAT` HTML 리소스를 앱에 포함하고, 앱 번들을 **Ad Hoc** 방식으로 서명합니다. Ad Hoc 서명은 Apple Developer 인증서 서명이나 공증(notarization)이 아니므로 인터넷에서 내려받은 앱을 처음 열 때 macOS의 보안 경고가 표시될 수 있습니다. 사용자는 DMG에서 앱을 `Applications`로 복사한 뒤 Finder에서 우클릭하여 **열기**를 선택해야 할 수 있습니다.
+
+공식 배포에서 경고 없이 열리게 하려면 Ad Hoc 대신 Apple Developer ID Application 인증서로 서명하고, `notarytool` 공증 및 Staple 단계를 추가해야 합니다. 또한 대상 Mac에는 Ollama가 별도로 설치되어 있어야 하며, 앱 자체에 Ollama 모델 파일은 포함되지 않습니다.
+
 ## 사용 순서
 
 1. **Ollama 설치**: 다운로드를 바로 시작하지 않고 **Ollama 설치 탭**으로 전환합니다. 다음 중 원하는 방법을 선택합니다.
