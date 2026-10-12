@@ -110,3 +110,97 @@ def fetch_tags(name):
         html = response.read().decode('utf-8')
     values = re.findall(r'href="/library/' + re.escape(name) + r':([^"?]+)"', html)
     return list(dict.fromkeys(values))
+
+
+PERFORMANCE_DEFAULTS = {
+    'keep_alive': '5m', 'context_length': 4096, 'num_parallel': 1,
+    'flash_attention': False, 'kv_cache_type': 'f16',
+    'num_predict': 4096, 'thinking': 'auto', 'integrated_gpu': False,
+    'max_loaded_models': 1, 'num_gpu': -1,
+}
+
+
+def validate_performance(values):
+    result = dict(PERFORMANCE_DEFAULTS, **values)
+    for key, low, high in [('context_length', 512, 131072),
+                           ('num_parallel', 1, 8), ('num_predict', 1, 32768),
+                           ('max_loaded_models', 1, 8), ('num_gpu', -1, 256)]:
+        value = result[key]
+        if isinstance(value, bool):
+            raise ValueError(key + ' 값을 확인하세요.')
+        try:
+            number = int(str(value))
+        except (ValueError, TypeError):
+            raise ValueError(key + '에는 정수를 입력하세요.') from None
+        if not low <= number <= high:
+            raise ValueError(f'{key}: {low}~{high} 범위로 입력하세요.')
+        result[key] = number
+    if result['keep_alive'] not in ('0', '5m', '10m', '30m', '1h', '-1'):
+        raise ValueError('모델 유지 시간을 확인하세요.')
+    if result['kv_cache_type'] not in ('f16', 'q8_0', 'q4_0'):
+        raise ValueError('KV 캐시 유형을 확인하세요.')
+    if type(result['integrated_gpu']) is not bool:
+        raise ValueError('내장 GPU 설정을 확인하세요.')
+    if type(result['flash_attention']) is not bool:
+        raise ValueError('Flash Attention 설정을 확인하세요.')
+    if result['kv_cache_type'] != 'f16' and not result['flash_attention']:
+        raise ValueError('캐시 양자화를 사용하려면 Flash Attention을 켜세요.')
+    if result['thinking'] not in ('auto', 'off', 'low'):
+        raise ValueError('추론 설정을 확인하세요.')
+    return {key: result[key] for key in PERFORMANCE_DEFAULTS}
+
+
+def performance_environment(values):
+    settings = validate_performance(values)
+    environment = {
+        'OLLAMA_MAX_LOADED_MODELS': str(settings['max_loaded_models']),
+        'OLLAMA_KEEP_ALIVE': settings['keep_alive'],
+        'OLLAMA_CONTEXT_LENGTH': str(settings['context_length']),
+        'OLLAMA_NUM_PARALLEL': str(settings['num_parallel']),
+        'OLLAMA_FLASH_ATTENTION': '1' if settings['flash_attention'] else '0',
+        'OLLAMA_KV_CACHE_TYPE': settings['kv_cache_type'],
+    }
+    if settings['integrated_gpu']:
+        environment.update(OLLAMA_IGPU_ENABLE='1', OLLAMA_VULKAN='1')
+    return environment
+
+
+def chat_performance(values, model):
+    settings = validate_performance(values)
+    result = {'keep_alive': settings['keep_alive'], 'options': {
+        'num_ctx': settings['context_length'], 'num_predict': settings['num_predict']}}
+    if settings['num_gpu'] != -1:
+        result['options']['num_gpu'] = settings['num_gpu']
+    if settings['thinking'] != 'auto':
+        # GPT-OSS supports effort levels, but cannot disable thinking.
+        result['think'] = 'low' if model.split(':')[0].split('/')[-1] == 'gpt-oss' else False
+    return result
+
+
+def running_model_change(previous, models):
+    """Infer a single observed model activity; /api/ps has no request history."""
+    snapshot = {item.get('name') or item.get('model'): item.get('expires_at')
+                for item in models if item.get('name') or item.get('model')}
+    changed = [name for name, expiry in snapshot.items()
+               if name not in previous or (expiry is not None and expiry != previous[name])]
+    return (changed[0] if len(changed) == 1 else None), snapshot
+
+
+def model_placement(models):
+    if not models:
+        return 'Ollama: 모델 미로드'
+    parts = []
+    for model in models:
+        name = model.get('name') or model.get('model', '?')
+        size, vram = model.get('size', 0), model.get('size_vram', 0)
+        quant = model.get('details', {}).get('quantization_level', '?')
+        if not isinstance(size, (int, float)) or size <= 0 or not isinstance(vram, (int, float)):
+            placement = '배치 정보 없음'
+        elif vram <= 0:
+            placement = 'CPU 배치'
+        elif vram < size:
+            placement = f'CPU + GPU · GPU 할당 {vram / 2**30:.2f} GB'
+        else:
+            placement = f'GPU 배치 · {vram / 2**30:.2f} GB'
+        parts.append(f'{name} [{quant}] {placement}')
+    return 'Ollama: ' + ' / '.join(parts)

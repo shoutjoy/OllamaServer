@@ -31,6 +31,14 @@ with patch('app.Client.get', side_effect=get), patch('app.Client.stream', side_e
             time.sleep(0.02)
         raise AssertionError('UI job timed out')
     settle()
+    app.resource_panel.update_sample({'connected': 100, 'gpu': 40, 'cpu': 25, 'ram': 50, 'ram_detail': '8 / 16 GB'})
+    app.resource_panel.update_sample({'connected': 0, 'gpu': None, 'cpu': 30, 'ram': 55})
+    app.update()
+    labels = [app.resource_panel.canvas.itemcget(item, 'text') for item in app.resource_panel.canvas.find_all()
+              if app.resource_panel.canvas.type(item) == 'text']
+    assert any('연결 안 됨' in text for text in labels)
+    assert any('CPU  30.0%' in text for text in labels)
+    assert any('측정 대기 / 불가' in text for text in labels)
     assert app.online
     assert app.server_light.itemcget(app.server_light_dot, 'fill') == '#16a34a'
     app.refreshed((None, []))
