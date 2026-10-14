@@ -24,6 +24,10 @@ Windows에서는 [Lemonade](https://lemonade-server.ai/docs/guide/install/window
 
 **[최신 Ollama_Park.exe 다운로드](https://github.com/shoutjoy/OllamaServer/releases/latest/download/Ollama_Park.exe)**
 
+다운로드가 열리지 않으면 **[저장소의 Ollama_Park.exe 직접 다운로드](https://github.com/shoutjoy/OllamaServer/raw/refs/heads/main/Ollama_Park.exe)** 또는 **[릴리스 목록](https://github.com/shoutjoy/OllamaServer/releases)**에서 Windows 실행 파일을 받으세요.
+
+로컬에서 빌드하거나 복구한 EXE는 GitHub에 자동 업로드되지 않습니다. 새 파일을 배포하려면 루트의 `Ollama_Park.exe`와 README 변경을 `main`에 커밋하고 푸시하세요. 아래 배포 workflow가 성공하면 최신 다운로드 링크에 반영됩니다.
+
 Windows 다운로드는 GitHub Releases의 최신 배포 파일을 사용합니다. `main`의 `Ollama_Park.exe`가 변경되면 **Publish latest Windows executable** workflow가 저장소의 EXE를 그대로 업로드하고 최신 릴리스로 지정합니다. 실행 파일을 다시 빌드하지 않으므로 로컬에서 올린 파일과 배포 파일이 같습니다. [SHA256SUMS.txt](https://github.com/shoutjoy/OllamaServer/releases/latest/download/SHA256SUMS.txt)로 파일을 확인할 수 있습니다. 다운로드 폴더에 이전 파일이 있다면 새로 받은 파일의 이름에 `(1)` 등이 붙을 수 있으므로 새 파일을 실행하세요.
 
 배포 상태는 [GitHub Actions](https://github.com/shoutjoy/OllamaServer/actions/workflows/publish-windows.yml)에서 확인할 수 있습니다. 자동 배포 실패 시 오류를 해결한 뒤 **Run workflow → main → Run workflow**로 다시 배포합니다. workflow 실행이 성공해야 위 최신 다운로드 링크가 갱신됩니다.
