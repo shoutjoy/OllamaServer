@@ -22,6 +22,29 @@ with patch('app.Client.get', side_effect=get), patch('app.Client.stream', side_e
      patch('app.search_models', return_value=[('test', 'Test model')]), \
      patch('app.fetch_tags', return_value=['1b']), patch('app.App.select_model'):
     app = App()
+    from tkinter import ttk
+    style = ttk.Style(app)
+    assert app.cget('background') == '#111827'
+    assert style.lookup('TCombobox', 'fieldbackground', ('readonly',)) == '#1f2937'
+    assert style.lookup('Treeview', 'background', ('selected',)) == '#2563eb'
+    for text_widget in (app.transcript, app.prompt, app.log_view):
+        assert text_widget.cget('background') == '#101827'
+        assert text_widget.cget('insertbackground') == '#e5e7eb'
+    with patch('app.Path.write_text') as save_theme:
+        app.toggle_theme()
+        assert app.ui_theme == 'light'
+        for terminal in (app.console_view, app.install_terminal_view):
+            assert terminal.cget('background') == '#000000'
+            assert terminal.cget('foreground') == '#e5e7eb'
+        assert app.resource_panel.canvas.cget('background') == '#101827'
+        assert app.prompt.cget('background') == '#ffffff'
+        assert style.lookup('TCombobox', 'fieldbackground', ('readonly',)) == '#ffffff'
+        assert '"theme": "light"' in save_theme.call_args.args[0]
+        app.toggle_theme()
+        assert app.ui_theme == 'dark'
+        assert app.console_view.cget('background') == '#000000'
+        assert app.resource_panel.canvas.cget('background') == '#101827'
+        assert app.prompt.cget('background') == '#101827'
     def settle():
         deadline = time.monotonic() + 4
         while time.monotonic() < deadline:
@@ -31,6 +54,22 @@ with patch('app.Client.get', side_effect=get), patch('app.Client.stream', side_e
             time.sleep(0.02)
         raise AssertionError('UI job timed out')
     settle()
+    def buttons(widget):
+        for child in widget.winfo_children():
+            if child.winfo_class() == 'TButton':
+                yield child.cget('text')
+            yield from buttons(child)
+    assert '서버 재시작' in list(buttons(app))
+    assert 'Open WebUI 설치' in list(buttons(app))
+    def fake_webui_install(root, notify):
+        notify('테스트 설치 출력')
+    with patch('app.open_webui_executable') as webui_exe, patch('app.install_open_webui', side_effect=fake_webui_install):
+        webui_exe.return_value.is_file.return_value = False
+        app.install_webui()
+        settle()
+        assert app.notebook.select() == str(app.install_tab)
+        assert '설치 완료' in app.webui_install_status.get()
+        assert '테스트 설치 출력' in app.install_terminal_view.get('1.0', 'end')
     app.resource_panel.update_sample({'connected': 100, 'gpu': 40, 'cpu': 25, 'ram': 50, 'ram_detail': '8 / 16 GB'})
     app.resource_panel.update_sample({'connected': 0, 'gpu': None, 'cpu': 30, 'ram': 55})
     app.update()

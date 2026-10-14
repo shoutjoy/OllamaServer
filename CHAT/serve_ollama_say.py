@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
@@ -12,21 +13,43 @@ import webbrowser
 
 ROOT = Path(__file__).resolve().parent
 PORT = 8767
+# Match the desktop settings location, including packaged builds.
+sys.path.insert(0, str(ROOT.parent))
+from core import Client, chat_performance, effective_performance, open_url
+SETTINGS = ((Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'OllamaDesk')
+            if getattr(sys, 'frozen', False) else ROOT.parent / '.data') / 'settings.json'
+
+
+def optimized_payload(payload):
+    if not isinstance(payload, dict) or not isinstance(payload.get('model'), str):
+        raise ValueError('모델을 선택하세요.')
+    try:
+        saved = json.loads(SETTINGS.read_text('utf-8'))
+        settings = effective_performance(saved, payload['model'])
+    except (OSError, ValueError, TypeError, AttributeError):
+        settings = effective_performance({}, payload['model'])
+    defaults = chat_performance(settings, payload['model'])
+    # Explicit CHAT generation choices retain precedence.
+    defaults['options'].update(payload.get('options') or {})
+    return dict(defaults, **{k: v for k, v in payload.items() if k != 'options'},
+                options=defaults['options'])
+
 
 def list_models():
-    executable = shutil.which('ollama')
-    if not executable:
-        candidate = Path(os.environ.get('LOCALAPPDATA', '')) / 'Programs/Ollama/ollama.exe'
-        if candidate.is_file():
-            executable = str(candidate)
-    if not executable:
-        raise RuntimeError('Ollama 실행 파일을 찾을 수 없습니다. Ollama 설치 후 다시 실행하세요.')
-    result = subprocess.run([executable, 'list'], capture_output=True, text=True,
-                            encoding='utf-8', errors='replace', timeout=15,
-                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or 'ollama list 실패')
-    return {'models': [{'name': line.split()[0]} for line in result.stdout.splitlines()[1:] if line.strip()]}
+    result = selected_client().get('/api/tags')
+    try:
+        result['default_model'] = json.loads(SETTINGS.read_text('utf-8')).get('model', '')
+    except (OSError, ValueError):
+        pass
+    return result
+
+
+def selected_client():
+    try:
+        saved = json.loads(SETTINGS.read_text('utf-8'))
+    except (OSError, ValueError):
+        saved = {}
+    return Client(saved.get('engine', 'ollama'))
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, _format, *args):
@@ -81,10 +104,9 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < size <= 4_000_000:
                 return self.send_error(413)
             payload = self.rfile.read(size)
-            json.loads(payload)
-            request = Request('http://127.0.0.1:11434/api/chat', data=payload,
-                              headers={'Content-Type': 'application/json'}, method='POST')
-            with urlopen(request, timeout=300) as response:
+            client = selected_client()
+            payload = client.prepare_chat(optimized_payload(json.loads(payload)))
+            with open_url(client.base_url + '/api/chat', data=payload, timeout=300) as response:
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/x-ndjson')
                 self.send_header('Connection', 'close')

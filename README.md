@@ -2,11 +2,23 @@
 
 Python 표준 라이브러리와 Tkinter로 만든 한국어 Windows Ollama 관리자입니다.
 
+## AMD NPU 모델 사용
+
+상단 **AI 실행 엔진**에서 **Lemonade · FastFlowLM NPU**를 선택한 뒤 **서버 시작**을 누르세요. 설치된 Lemonade 서버에 연결하거나 서버를 시작하고, 다운로드된 FLM 모델을 NPU turbo 모드로 로드합니다. **사용할 모델**에서 `qwen3-it-4b-FLM:latest` 등을 선택하면 관리자 **대화**와 **챗 열기**에서 NPU 모델을 사용할 수 있습니다. 엔진 선택은 소스/EXE 각각의 설정 파일에 저장됩니다.
+
+Lemonade 모드의 모델 검색은 FastFlowLM 대화 모델을 표시하며 **모델 설치**로 다운로드합니다. NPU 모델과 Ollama 모델 파일은 별도로 관리됩니다. 관리자 및 웹 채팅 요청은 저장된 컨텍스트 길이를 사용하고 FLM 모델을 turbo 모드로 준비하며, Ollama GPU 레이어/추론 옵션은 NPU 요청에서 제외합니다. **GPU / NPU 사용 확인**은 Lemonade 모드에서 실제 실행 장치·모델 상태를 조회합니다. 서버 정지/재시작은 선택한 엔진에 적용되며, 엔진을 바꾸는 것만으로 이전 서버를 종료하지 않습니다.
+
+Lemonade 서버 주소는 `http://127.0.0.1:13305`, Ollama는 `http://127.0.0.1:11434`입니다. 외부 Ollama 호환 앱은 연결 주소를 Lemonade 주소로 변경해야 NPU 모델을 사용할 수 있습니다. Open WebUI 신규 실행은 선택한 주소를 전달하지만, 이미 실행 중이거나 자체 연결 설정을 저장한 Open WebUI는 관리자 설정 → 연결에서 주소를 변경하세요. ‘챗 열기’ 웹 화면은 엔진 변경 후 모델 목록을 새로고침하세요.
+
+Windows에서는 [Lemonade](https://lemonade-server.ai/docs/guide/install/windows/) 설치와 지원되는 AMD NPU 및 드라이버가 필요합니다. Ollama 모드의 GPU 성능 옵션은 Lemonade 엔진 설정에 적용되지 않습니다. 기존 EXE 실행 중에는 `powershell -NoProfile -ExecutionPolicy Bypass -File build_exe.ps1 -OutputName Ollama_Park_Updated.exe`로 별도 파일을 빌드할 수 있습니다.
+
 ## 실행
 
 별도 Python 설치 없이 단일 파일 `Ollama_Park.exe`를 더블클릭하면 실행됩니다.
 
 **[Ollama_Park.exe 바로 다운로드](https://raw.githubusercontent.com/shoutjoy/OllamaServer/main/Ollama_Park.exe)**
+
+**[OllamaDesk Mac.dmg 다운로드](https://github.com/shoutjoy/OllamaServer/releases/download/mac-1.0/OllamaDesk-macOS.dmg)**
 
 소스에서 실행하려면 Python 3.10 이상(Tkinter 포함)으로:
 
@@ -16,7 +28,89 @@ python app.py
 
 소스 실행에는 별도 pip 패키지가 필요하지 않습니다. 단일 EXE의 설정과 로그는 `%LOCALAPPDATA%\OllamaDesk`에 저장됩니다.
 
+macOS 사용자는 아래 **Mac 사용자: 다운로드부터 실행까지**를 따라 `run_mac.command`로 실행하세요.
+
+‘챗 열기’ 옆의 **Open WebUI** 버튼으로 Open WebUI를 시작하고 브라우저에서 열 수 있습니다 (`http://127.0.0.1:8080`). Ollama 연결은 `http://127.0.0.1:11434`로 설정됩니다. **앱 설치 → Ollama · Open WebUI 설치 → Open WebUI 설치**에서 먼저 설치할 수도 있습니다. 설치 상태와 진행 출력을 앱에서 확인할 수 있으며 실패하면 다시 설치 버튼을 누르세요. 이미 설치된 환경은 재사용합니다. Windows에서는 uv가 없으면 공식 배포 파일을 앱 데이터 폴더에 다운로드하고 Python 3.11 환경과 Open WebUI를 자동 설치합니다. 다른 OS에서는 uv를 먼저 설치하세요. 설치·시작 작업은 백그라운드에서 진행됩니다. 처음 열린 화면에서 관리자 계정을 생성하세요.
+
+Open WebUI의 환경, 대화 데이터, 설치·서버 로그는 소스 실행 시 `.data/open-webui`, EXE 실행 시 `%LOCALAPPDATA%\OllamaDesk\open-webui`에 저장됩니다. EXE 옆 `.data/open-webui`에 이미 설치되어 있으면 그 환경을 재사용합니다. 매니저 종료 후에도 Open WebUI 서버는 유지되며, 다시 누르면 실행 중인 서버를 엽니다. 8080 포트를 다른 서비스가 사용하면 오류를 안내합니다. 설치 방법: [Open WebUI 공식 안내](https://docs.openwebui.com/getting-started/quick-start/).
+
 상단의 **MDpro** 버튼은 브라우저에서 [MDpro Viewer](https://mdproviewer.vercel.app/)를 엽니다.
+
+## Mac 사용자: 다운로드부터 실행까지
+
+`run_mac.command`는 Windows의 `run.bat`처럼 Python 앱을 실행하는 macOS용 파일입니다. `Ollama_Park.exe`는 Windows 전용이므로 Mac에서는 아래 소스 실행 방법을 사용하세요. Apple Silicon과 Intel Mac 모두 설치한 Python으로 실행하며, 관리자 소스 실행에는 별도 pip 패키지가 필요하지 않습니다.
+
+### 1. 프로젝트 전체 다운로드
+
+1. **[프로젝트 ZIP 다운로드](https://github.com/shoutjoy/OllamaServer/archive/refs/heads/main.zip)**를 누릅니다. GitHub 저장소 화면에서 **Code → Download ZIP**으로 내려받아도 됩니다.
+2. Finder의 **다운로드** 폴더에서 `OllamaServer-main.zip`을 더블클릭해 압축을 풉니다.
+3. 압축을 푼 `OllamaServer-main` 폴더 안에 `run_mac.command`, `app.py`, `CHAT`, `Icon`이 있는지 확인합니다.
+
+**`run_mac.command`만 따로 다운로드하면 실행되지 않습니다.** 프로젝트 폴더 전체가 필요하며, 실행 파일을 폴더 밖으로 옮기지 마세요. 폴더 전체는 원하는 위치로 옮겨도 됩니다.
+
+### 2. Python 설치 및 확인
+
+1. **[Python 공식 macOS 다운로드](https://www.python.org/downloads/macos/)**에서 Python 3.10 이상의 macOS 설치 프로그램(`.pkg`)을 다운로드합니다.
+2. `.pkg`를 열고 설치 안내를 따릅니다. Tkinter가 포함된 Python이 필요합니다.
+3. **응용 프로그램 → 유틸리티 → 터미널**을 열고 다음 명령을 각각 입력합니다.
+
+```bash
+python3 --version
+python3 -m tkinter
+```
+
+첫 명령에서 Python 3.10 이상이 표시되고, 두 번째 명령에서 작은 Tk 창이 열리면 준비가 완료된 것입니다. 확인 창은 닫아도 됩니다. `python3`를 찾을 수 없거나 `No module named tkinter` / `_tkinter`가 나오면 위 공식 설치 프로그램으로 Python을 설치한 뒤 터미널을 다시 열어 확인하세요.
+
+### 3. 처음 한 번 실행 권한 설정
+
+다운로드한 ZIP은 실행 권한이 없을 수 있으므로 터미널에서 프로젝트 폴더로 이동한 뒤 실행 권한을 부여합니다. 기본 다운로드 위치에 압축을 풀었다면 다음 명령을 입력하세요.
+
+```bash
+cd "$HOME/Downloads/OllamaServer-main"
+chmod +x run_mac.command
+./run_mac.command
+```
+
+다른 위치에 저장했다면 터미널에 `cd `를 입력한 뒤(뒤에 공백 포함), Finder의 프로젝트 폴더를 터미널로 끌어 놓고 Enter를 누르세요. 그다음 위의 `chmod`와 실행 명령을 입력하면 됩니다.
+
+### 4. 다음부터 더블클릭으로 실행
+
+Finder에서 프로젝트 폴더 안의 **`run_mac.command`를 더블클릭**하세요. 터미널이 열리고 Ollama Desk 관리자 창이 표시됩니다. 앱을 사용하는 동안 실행한 터미널 창은 열어 두고, 종료할 때는 관리자 창을 먼저 닫으세요.
+
+실행 스크립트는 자신의 폴더를 기준으로 `app.py`를 실행합니다. `.venv/bin/python3`가 있으면 해당 환경을 우선 사용하고, 없으면 PATH에서 `python3`를 찾습니다. 기존 가상환경에 Tkinter가 없다면 Tkinter를 포함한 Python으로 가상환경을 다시 준비해야 합니다.
+
+### 5. Ollama 설치와 첫 대화
+
+1. **[Ollama 공식 Mac 다운로드](https://ollama.com/download/mac)**에서 Mac용 Ollama를 설치하고 실행합니다. 관리자와 별도로 Ollama가 필요합니다.
+2. `run_mac.command`로 관리자를 실행하고 **AI 실행 엔진**에서 **Ollama**를 선택합니다.
+3. **서버 시작**을 눌러 로컬 Ollama 서버에 연결합니다.
+4. **공식 모델 검색**에서 모델을 고른 뒤 **모델 설치**를 누릅니다. 다운로드 시간과 필요한 메모리는 모델마다 다릅니다.
+5. 설치된 모델을 **사용할 모델**에서 선택하고 **대화** 탭에서 메시지를 입력합니다.
+
+소스로 실행한 관리자의 설정과 로그는 프로젝트 폴더 안의 `.data`에 저장됩니다. 업데이트할 때 기존 설정을 유지하려면 해당 폴더를 보관하세요.
+
+### 실행이 안 될 때
+
+- **`Permission denied`**: 프로젝트 폴더에서 `chmod +x run_mac.command`를 다시 실행하세요.
+- **`app.py`를 찾을 수 없음**: ZIP 전체를 압축 해제했는지, `run_mac.command`와 `app.py`가 같은 폴더에 있는지 확인하세요.
+- **Python 또는 Tkinter 오류**: 2단계의 두 명령으로 설치를 확인하세요. 스크립트가 `.venv`를 사용한다면 그 환경의 Python도 확인하세요.
+- **텍스트 편집기로 열림**: 터미널에서 `./run_mac.command`로 실행하거나 Finder의 **다음으로 열기 → 터미널**을 선택하세요.
+- **macOS가 다운로드한 파일 실행을 차단함**: 파일 출처를 확인한 뒤 실행을 한 번 시도하고, **시스템 설정 → 개인정보 보호 및 보안**에 해당 파일의 **확인 없이 열기(Open Anyway)**가 표시되면 선택하세요. 자세한 절차는 [Apple 공식 안내](https://support.apple.com/guide/mac-help/open-an-app-by-overriding-security-settings-mh40616/mac)를 참고하세요.
+- **관리자 창이 뜨지 않거나 곧 닫힘**: 터미널에서 `./run_mac.command`를 실행해 오류를 확인하세요. 실행 실패 시 스크립트는 Enter를 누를 때까지 오류 출력을 유지합니다.
+- **Ollama 연결 실패**: Ollama 앱이 실행 중인지 확인하고 관리자에서 서버 시작을 다시 누르세요. 기본 연결 주소는 `http://127.0.0.1:11434`입니다.
+
+## macOS 앱 / DMG 배포
+
+macOS에서는 Python이 설치되지 않은 다른 Mac에서도 실행할 수 있도록 PyInstaller로 `.app`과 `.dmg`를 만들 수 있습니다. 빌드는 대상 Mac의 CPU 아키텍처에서 직접 실행하세요. Apple Silicon(`arm64`)과 Intel(`x86_64`)은 각각 별도로 빌드해야 하며, 한 번의 빌드만으로 두 아키텍처를 모두 지원하지는 않습니다.
+
+```bash
+python3 -m pip install pyinstaller
+./packaging/build_macos.sh
+```
+
+결과물은 `dist/OllamaDesk.app`과 `dist/OllamaDesk-macOS.dmg`입니다. 스크립트는 `Icon`과 `CHAT` HTML 리소스를 앱에 포함하고, 앱 번들을 **Ad Hoc** 방식으로 서명합니다. Ad Hoc 서명은 Apple Developer 인증서 서명이나 공증(notarization)이 아니므로 인터넷에서 내려받은 앱을 처음 열 때 macOS의 보안 경고가 표시될 수 있습니다. 사용자는 DMG에서 앱을 `Applications`로 복사한 뒤 Finder에서 우클릭하여 **열기**를 선택해야 할 수 있습니다.
+
+공식 배포에서 경고 없이 열리게 하려면 Ad Hoc 대신 Apple Developer ID Application 인증서로 서명하고, `notarytool` 공증 및 Staple 단계를 추가해야 합니다. 또한 대상 Mac에는 Ollama가 별도로 설치되어 있어야 하며, 앱 자체에 Ollama 모델 파일은 포함되지 않습니다.
 
 ## 사용 순서
 
@@ -100,3 +194,9 @@ KV 캐시의 q8_0/q4_0는 모델 가중치 양자화와 별개입니다. 가중�
 ## EXE 다시 빌드
 
 Python과 PyInstaller가 설치된 개발 환경에서 `powershell -NoProfile -ExecutionPolicy Bypass -File build_exe.ps1`을 실행하면 단일 창 모드 EXE를 빌드하고 루트의 `Ollama_Park.exe`를 교체합니다. 아이콘과 CHAT HTML을 포함하고 사용자 설정·로그·모델 파일은 포함하지 않습니다. 중간 결과는 Git에서 제외된 `.data` 아래에 저장하며 100MB 이상이면 교체를 중단합니다. EXE 사용 시 설정은 `%LOCALAPPDATA%\OllamaDesk`에 저장되므로 소스 실행의 `.data/settings.json`과 별개입니다.
+
+
+서버 설정을 저장한 뒤 상단 **서버 재시작**을 누르면 정지 확인 후 저장된 설정으로 시작합니다. 관리자 앱 밖에서 실행된 Windows Ollama 서버도 설치 경로를 확인하여 종료합니다. 설치·대화·콘솔 작업 중에는 재시작하지 않으며, 정지 실패 시 새 서버를 실행하지 않습니다.
+GPU 그래프는 장치별 이름과 내장/외장 구분을 표시하며 알 수 없는 장치는 유형 미확인으로 표시합니다. CHAT은 저장된 유지 시간·컨텍스트·GPU 레이어와 모델별 요청 프로필을 사용합니다. CHAT에서 직접 지정한 생성 옵션은 우선 적용됩니다.
+
+왼쪽 하단의 `일반모드로 전환` / `다크모드로 전환` 버튼으로 테마를 즉시 변경할 수 있습니다. 선택한 모드는 설정 파일에 저장되어 다음 실행에도 유지되며, 단일 EXE에서도 두 모드를 모두 사용할 수 있습니다.

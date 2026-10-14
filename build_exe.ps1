@@ -1,3 +1,4 @@
+param([ValidateSet('Ollama_Park.exe', 'Ollama_Park_Updated.exe')][string]$OutputName = 'Ollama_Park.exe')
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $iconFile = Join-Path $PSScriptRoot 'Icon/Ollama.png'
@@ -7,5 +8,5 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --name Ollama_Par
 if ($LASTEXITCODE -ne 0) { throw 'EXE build failed.' }
 $builtExe = Join-Path $PSScriptRoot '.data/dist/Ollama_Park.exe'
 if ((Get-Item -LiteralPath $builtExe).Length -ge 100MB) { throw 'EXE exceeds 100 MB.' }
-Copy-Item -LiteralPath $builtExe -Destination (Join-Path $PSScriptRoot 'Ollama_Park.exe') -Force
-Write-Output 'Updated Ollama_Park.exe'
+Copy-Item -LiteralPath $builtExe -Destination (Join-Path $PSScriptRoot $OutputName) -Force
+Write-Output "Updated $OutputName"

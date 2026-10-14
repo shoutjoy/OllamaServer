@@ -55,3 +55,25 @@ class IntegratedGpuTests(unittest.TestCase):
         self.assertIn('CPU + GPU', model_placement([model]))
         model['size_vram'] = 100
         self.assertIn('GPU 배치', model_placement([model]))
+
+
+class ModelProfileTests(unittest.TestCase):
+    def test_exact_profile_and_no_mutation(self):
+        from core import effective_performance
+        saved = {'performance': {'context_length': 4096}, 'model_profiles': {'large:8b': {'context_length': 2048, 'keep_alive': '-1'}}}
+        self.assertEqual(effective_performance(saved, 'large:8b')['context_length'], 2048)
+        self.assertEqual(effective_performance(saved, 'other')['context_length'], 4096)
+        self.assertEqual(saved['performance']['context_length'], 4096)
+
+    def test_chat_proxy_defaults_and_explicit_choices(self):
+        from CHAT.serve_ollama_say import optimized_payload
+        from unittest.mock import patch
+        with patch('CHAT.serve_ollama_say.SETTINGS') as path:
+            path.read_text.return_value = '{"performance":{"keep_alive":"-1","context_length":2048}}'
+            result = optimized_payload({'model': 'small', 'options': {'temperature': .2}})
+            self.assertEqual(result['keep_alive'], '-1')
+            self.assertEqual(result['options']['num_ctx'], 2048)
+            self.assertEqual(result['options']['temperature'], .2)
+            explicit = optimized_payload({'model': 'small', 'keep_alive': '0', 'options': {'num_ctx': 8192}})
+            self.assertEqual(explicit['keep_alive'], '0')
+            self.assertEqual(explicit['options']['num_ctx'], 8192)

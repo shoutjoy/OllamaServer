@@ -10,6 +10,19 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 BASE_URL = 'http://127.0.0.1:11434'
+LEMONADE_URL = 'http://127.0.0.1:13305'
+ENGINE_LABELS = {'ollama': 'Ollama · CPU/GPU', 'lemonade': 'Lemonade · FastFlowLM NPU'}
+
+
+def engine_url(engine):
+    return LEMONADE_URL if engine == 'lemonade' else BASE_URL
+
+
+def find_lemonade():
+    candidate = Path(os.environ.get('LOCALAPPDATA', '')) / 'lemonade_server/bin/LemonadeServer.exe'
+    if candidate.is_file():
+        return str(candidate)
+    return shutil.which('LemonadeServer')
 INSTALL_URL = 'https://ollama.com/download/OllamaSetup.exe'
 NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 
@@ -45,7 +58,8 @@ def open_url(url, data=None, timeout=30):
     try:
         # A system HTTP proxy must not intercept the local Ollama server.
         opener = (urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                  if url.startswith(BASE_URL + '/') else urllib.request.build_opener())
+                  if urllib.parse.urlsplit(url).hostname in ('127.0.0.1', 'localhost', '::1')
+                  else urllib.request.build_opener())
         return opener.open(req, timeout=timeout)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')[:600]
@@ -53,12 +67,38 @@ def open_url(url, data=None, timeout=30):
 
 
 class Client:
+    def __init__(self, engine='ollama'):
+        self.engine = engine if engine in ENGINE_LABELS else 'ollama'
+        self.base_url = engine_url(self.engine)
+
     def get(self, path, timeout=4):
-        with open_url(BASE_URL + path, timeout=timeout) as response:
+        with open_url(self.base_url + path, timeout=timeout) as response:
             return json.load(response)
 
+    def post(self, path, data, timeout=300):
+        with open_url(self.base_url + path, data, timeout=timeout) as response:
+            result = json.load(response)
+        if result.get('status') == 'error' or result.get('error'):
+            raise RuntimeError(result.get('error') or result.get('message'))
+        return result
+
+    def prepare_chat(self, data):
+        if self.engine != 'lemonade':
+            return data
+        data = dict(data, options=dict(data.get('options') or {}))
+        name = data['model'].removesuffix(':latest')
+        if name.lower().endswith('-flm'):
+            self.post('/api/v1/load', {'model_name': name,
+                      'ctx_size': data['options'].get('num_ctx', 8192),
+                      'flm_args': '--pmode turbo', 'save_options': True})
+        data['options'].pop('num_gpu', None)
+        data.pop('think', None)
+        return data
+
     def stream(self, path, data, cancel=None):
-        with open_url(BASE_URL + path, data, timeout=120) as response:
+        if path == '/api/chat':
+            data = self.prepare_chat(data)
+        with open_url(self.base_url + path, data, timeout=300 if self.engine == 'lemonade' else 120) as response:
             for line in response:
                 if cancel and cancel.is_set():
                     raise RuntimeError('작업을 취소했습니다.')
@@ -113,7 +153,7 @@ def fetch_tags(name):
 
 
 PERFORMANCE_DEFAULTS = {
-    'keep_alive': '5m', 'context_length': 4096, 'num_parallel': 1,
+    'keep_alive': '30m', 'context_length': 4096, 'num_parallel': 1,
     'flash_attention': False, 'kv_cache_type': 'f16',
     'num_predict': 4096, 'thinking': 'auto', 'integrated_gpu': False,
     'max_loaded_models': 1, 'num_gpu': -1,
@@ -186,15 +226,18 @@ def running_model_change(previous, models):
     return (changed[0] if len(changed) == 1 else None), snapshot
 
 
-def model_placement(models):
+def model_placement(models, engine='ollama'):
+    label = 'Lemonade' if engine == 'lemonade' else 'Ollama'
     if not models:
-        return 'Ollama: 모델 미로드'
+        return label + ': 모델 미로드'
     parts = []
     for model in models:
         name = model.get('name') or model.get('model', '?')
         size, vram = model.get('size', 0), model.get('size_vram', 0)
         quant = model.get('details', {}).get('quantization_level', '?')
-        if not isinstance(size, (int, float)) or size <= 0 or not isinstance(vram, (int, float)):
+        if model.get('details', {}).get('family') == 'flm':
+            placement = 'NPU · FastFlowLM'
+        elif not isinstance(size, (int, float)) or size <= 0 or not isinstance(vram, (int, float)):
             placement = '배치 정보 없음'
         elif vram <= 0:
             placement = 'CPU 배치'
@@ -203,4 +246,11 @@ def model_placement(models):
         else:
             placement = f'GPU 배치 · {vram / 2**30:.2f} GB'
         parts.append(f'{name} [{quant}] {placement}')
-    return 'Ollama: ' + ' / '.join(parts)
+    return label + ': ' + ' / '.join(parts)
+
+
+def effective_performance(saved, model):
+    """Exact model profiles keep context stable across repeated requests."""
+    values = dict(saved.get('performance', {}))
+    values.update(saved.get('model_profiles', {}).get(model, {}))
+    return validate_performance(values)

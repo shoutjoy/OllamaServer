@@ -11,13 +11,14 @@ ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07)')
 
 
 class ConsoleRunner:
-    def __init__(self):
+    def __init__(self, base_url='http://127.0.0.1:11434'):
+        self.base_url = base_url
         self.process = None
         self.lock = threading.Lock()
         self.cancel = threading.Event()
 
     def run(self, args, output):
-        env = dict(os.environ, OLLAMA_HOST='127.0.0.1:11434', NO_COLOR='1', TERM='dumb')
+        env = dict(os.environ, OLLAMA_HOST=self.base_url, NO_COLOR='1', TERM='dumb')
         with self.lock:
             if self.cancel.is_set():
                 return -1

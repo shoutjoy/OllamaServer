@@ -1,4 +1,6 @@
 import unittest
+import json
+import subprocess
 from unittest.mock import patch
 from resource_monitor import cpu_percent, gpu_engine_percent, ResourceSampler
 
@@ -21,4 +23,33 @@ class ResourceTests(unittest.TestCase):
     def test_gpu_failure_is_unknown_not_zero(self):
         sampler = ResourceSampler()
         with patch('resource_monitor.subprocess.run', side_effect=OSError('unavailable')):
-            self.assertIsNone(sampler.sample()['gpu'])
+            sample = sampler.sample()
+            self.assertIsNone(sample['gpu'])
+            self.assertIsNone(sample['npu'])
+
+    def test_sampler_separates_npu_from_gpu_and_sums_shared_engine(self):
+        rows = [
+            {'Name': 'pid_1_luid_0x00000000_0x00000001_phys_0_eng_0_engtype_Compute', 'UtilizationPercentage': 20},
+            {'Name': 'pid_1_luid_0x00000000_0x00000002_phys_0_eng_0_engtype_Compute', 'UtilizationPercentage': 35},
+            {'Name': 'pid_2_luid_0x00000000_0x00000002_phys_0_eng_0_engtype_Compute', 'UtilizationPercentage': 40}]
+        data = {'engines': rows, 'adapters': [
+            {'id': 'luid_0x00000000_0x00000001', 'name': 'NVIDIA GeForce RTX 4060'},
+            {'id': 'luid_0x00000000_0x00000002', 'name': 'AMD IPU Device'}]}
+        output = subprocess.CompletedProcess([], 0, json.dumps(data))
+        with patch('resource_monitor.os.name', 'nt'), patch('resource_monitor.subprocess.run', return_value=output):
+            sample = ResourceSampler().sample()
+        self.assertEqual(sample['gpu'], 20)
+        self.assertEqual(sample['npu'], 75)
+        self.assertEqual(len(sample['gpus']), 1)
+        self.assertIn('AMD IPU Device', sample['npu_detail'])
+
+
+class DeviceTests(unittest.TestCase):
+    def test_luid_mapping_separates_devices(self):
+        from resource_monitor import gpu_devices
+        rows = [{'Name': 'pid_1_luid_0x00000000_0x00000001_phys_0_eng_0_engtype_Compute', 'UtilizationPercentage': 60},
+                {'Name': 'pid_2_luid_0x00000000_0x00000002_phys_0_eng_0_engtype_Compute', 'UtilizationPercentage': 20}]
+        devices = gpu_devices(rows, [{'id': 'luid_0x00000000_0x00000001', 'name': 'NVIDIA GeForce RTX 4060'},
+                                     {'id': 'luid_0x00000000_0x00000002', 'name': 'Intel UHD Graphics'}])
+        self.assertEqual([d['kind'] for d in devices], ['외장', '내장'])
+        self.assertEqual([d['usage'] for d in devices], [60, 20])

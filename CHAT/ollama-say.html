@@ -736,9 +736,10 @@
       const updateSystemPrompt=value=>{setSystemPrompt(value);try{localStorage.setItem('ollama-say-system-prompt',value);}catch{showToast('설정을 저장할 수 없습니다.');}};
       // Server Connection States
       const [endpointType, setEndpointType] = useState('local'); // 'local' | 'online'
-      const [localUrl, setLocalUrl] = useState('http://127.0.0.1:11434');
+      const managerEndpoint = window.location.port === '8767' ? window.location.origin + '/ollama' : 'http://127.0.0.1:11434';
+      const [localUrl, setLocalUrl] = useState(managerEndpoint);
       const [onlineUrl, setOnlineUrl] = useState('');
-      const [activeUrl, setActiveUrl] = useState('http://127.0.0.1:11434');
+      const [activeUrl, setActiveUrl] = useState(managerEndpoint);
 
       // Model & Status States
       const [models, setModels] = useState([]);
@@ -930,7 +931,7 @@
             setModels(modelList);
             setConnectionStatus('connected');
             if (!selectedModel || !modelList.includes(selectedModel)) {
-              setSelectedModel(modelList[0]);
+              setSelectedModel(modelList.includes(data.default_model) ? data.default_model : modelList[0]);
             }
           } else {
             setModels([]);
@@ -1785,7 +1786,7 @@ URL: ${w.url}
                     <p className="text-xs text-slate-400">입력한 프롬프트가 모드 기본 지침을 대체합니다. 검색 자료는 계속 질문에 첨부됩니다.</p>
                     <button className="mt-3 bg-indigo-600 rounded-lg p-2 text-xs" onClick={handleDownloadSelf}>내 PC에 앱 다운로드 (.html)</button>
                     <p className="text-xs text-slate-400 mt-2">HTML 실행에는 CDN 라이브러리 다운로드를 위한 인터넷이 필요합니다. 문서는 브라우저 IndexedDB에 저장되며 앱 다운로드에는 포함되지 않습니다.</p>
-                    <p className="text-xs text-slate-400 mt-2">전체 로컬 모델: start-ollama-say.bat 실행 시 서버가 ollama list 명령을 사용합니다. HTML 직접 실행 / 원격 연결은 /api/tags를 사용합니다.</p>
+                    <p className="text-xs text-slate-400 mt-2">관리자의 ‘챗 열기’로 실행하면 선택한 Ollama 또는 Lemonade NPU 엔진의 모델을 사용합니다. 엔진을 바꾼 뒤 모델 목록을 새로고침하세요.</p>
                   </div>
                   <fieldset className="p-3 rounded-xl border border-slate-700 space-y-2">
                     <legend className="text-sm font-bold">GitHub 연결</legend>

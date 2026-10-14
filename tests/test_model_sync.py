@@ -40,6 +40,7 @@ class ModelSyncTests(unittest.TestCase):
 
     def test_ps_failure_does_not_mark_server_offline(self):
         app = Mock()
+        app.engine = 'ollama'
         app.busy = set()
         app.client.get.side_effect = [{'version': 'test'}, {'models': [{'name': 'a'}]}, OSError('ps unavailable')]
         app.job.side_effect = lambda key, work, done, **kw: done(work())
