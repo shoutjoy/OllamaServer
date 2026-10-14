@@ -18,6 +18,7 @@ from urllib.parse import quote
 
 from core import ENGINE_LABELS, find_lemonade, effective_performance, model_placement, running_model_change, PERFORMANCE_DEFAULTS, validate_performance, performance_environment, chat_performance, Client, NO_WINDOW, fetch_tags, find_ollama, model_name, models_directory, search_models
 from resource_monitor import ResourcePanel, ResourceSampler
+from memory_cleanup import clean_memory
 from dark_theme import apply_dark_theme
 from console_runner import ANSI, ConsoleRunner
 from installer_download import DownloadCancelled, download_installer
@@ -96,6 +97,7 @@ class App(tk.Tk):
         self.after(80, self.drain)
         self.refresh()
         self.after(5000, self.poll)
+        self.after(60000, self.auto_clean_memory)
 
     def build(self):
         shell = tk.Frame(self, bg='#111827')
@@ -170,6 +172,13 @@ class App(tk.Tk):
         self.install_nav_button.pack(side='right', padx=3)
         self.resource_panel = ResourcePanel(outer)
         self.resource_panel.pack(fill='x', pady=(8, 0))
+        memory_row = ttk.Frame(outer)
+        memory_row.pack(fill='x', pady=(4, 0))
+        ttk.Button(memory_row, text='앱 RAM 정리', command=self.clean_app_memory).pack(side='left')
+        self.auto_memory = tk.BooleanVar(value=True)
+        ttk.Checkbutton(memory_row, text='유휴 시 자동 정리 (1분 간격)', variable=self.auto_memory).pack(side='left', padx=8)
+        self.memory_status = tk.StringVar(value='앱 미사용 객체 정리 · 로그 화면 최대 20만 자 · 대화 유지')
+        ttk.Label(memory_row, textvariable=self.memory_status, wraplength=650).pack(side='left', padx=4)
         ttk.Label(outer, textvariable=self.install_status).pack(anchor='w', pady=8)
         folders = ttk.Frame(outer)
         folders.pack(fill='x', pady=(0, 8))
@@ -396,7 +405,7 @@ class App(tk.Tk):
         self.clipboard_append(COMMANDS[system])
 
     def install_terminal_write(self, text):
-        self.append(self.install_terminal_view, ANSI.sub('', text).replace('\r', '\n'))
+        self.append(self.install_terminal_view, ANSI.sub('', text).replace('\r', '\n'), max_chars=200000)
         if int(self.install_terminal_view.index('end-1c').split('.')[0]) > 6000:
             self.install_terminal_view.configure(state='normal')
             self.install_terminal_view.delete('1.0', '1000.0')
@@ -567,7 +576,7 @@ class App(tk.Tk):
         threading.Thread(target=run, daemon=True).start()
 
     def log(self, text):
-        self.append(self.log_view, time.strftime('[%H:%M:%S] ') + text + '\n')
+        self.append(self.log_view, time.strftime('[%H:%M:%S] ') + text + '\n', max_chars=200000)
         self.console_write(time.strftime('[%H:%M:%S] ') + text + '\n')
 
     @property
@@ -576,18 +585,23 @@ class App(tk.Tk):
 
     def load_access_log(self):
         try:
-            text = self.access_log_path.read_text('utf-8')
+            # UTF-8 uses at most four bytes per character. Avoid loading a
+            # potentially large on-disk log into RAM just to display its tail.
+            with self.access_log_path.open('rb') as source:
+                source.seek(0, os.SEEK_END)
+                source.seek(max(0, source.tell() - 800000))
+                text = source.read().decode('utf-8', errors='replace')[-200000:]
         except FileNotFoundError:
             text = 'AI 접속 및 사용 기록이 이곳에 표시됩니다.\n\n'
         except OSError as exc:
             text = f'[기존 기록 읽기 실패] {exc}\n\n'
-        self.append(self.access_log_view, text)
+        self.append(self.access_log_view, text, max_chars=200000)
 
     def access_log(self, event, detail):
         """Write a timestamped, local-only AI activity record."""
         timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
         entry = f'[{timestamp}] [{event}] {detail}\n'
-        self.append(self.access_log_view, entry)
+        self.append(self.access_log_view, entry, max_chars=200000)
         try:
             DATA.mkdir(exist_ok=True)
             with self.access_log_path.open('a', encoding='utf-8') as output:
@@ -611,7 +625,7 @@ class App(tk.Tk):
 
     def console_write(self, text):
         text = ANSI.sub('', text).replace('\r', '\n')
-        self.append(self.console_view, text)
+        self.append(self.console_view, text, max_chars=200000)
         if int(self.console_view.index('end-1c').split('.')[0]) > 6000:
             self.console_view.configure(state='normal')
             self.console_view.delete('1.0', '1000.0')
@@ -705,11 +719,46 @@ class App(tk.Tk):
         threading.Thread(target=follow, daemon=True).start()
 
     @staticmethod
-    def append(widget, text):
+    def append(widget, text, max_chars=None):
         widget.configure(state='normal')
         widget.insert('end', text)
+        if max_chars:
+            count = widget.count('1.0', 'end-1c', 'chars')
+            excess = (count[0] if count else 0) - max_chars
+            if excess > 0:
+                widget.delete('1.0', f'1.0+{excess}c')
         widget.see('end')
         widget.configure(state='disabled')
+
+    def trim_log_views(self):
+        # Keep conversation widgets and self.history intact. Full access logs
+        # remain on disk; only the displayed tail is bounded.
+        for name in ('log_view', 'console_view', 'access_log_view', 'install_terminal_view'):
+            widget = getattr(self, name, None)
+            if widget is None:
+                continue
+            count = widget.count('1.0', 'end-1c', 'chars')
+            excess = (count[0] if count else 0) - 200000
+            if excess > 0:
+                widget.configure(state='normal')
+                widget.delete('1.0', f'1.0+{excess}c')
+                widget.configure(state='disabled')
+
+    def clean_app_memory(self, automatic=False):
+        if self.busy - {'refresh'}:
+            if not automatic:
+                self.memory_status.set('작업 완료 후 앱 RAM 정리를 실행하세요.')
+            return
+        self.trim_log_views()
+        self.job('app-memory', lambda: clean_memory(trim=not automatic),
+                 lambda text: self.memory_status.set(text), quiet=True)
+
+    def auto_clean_memory(self):
+        if self.closed:
+            return
+        if self.auto_memory.get():
+            self.clean_app_memory(automatic=True)
+        self.after(60000, self.auto_clean_memory)
 
     def failure(self, key, text, quiet):
         self.log(f'{key}: {text}')
