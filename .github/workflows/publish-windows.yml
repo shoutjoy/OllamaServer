@@ -1,0 +1,51 @@
+name: Publish latest Windows executable
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Ollama_Park.exe
+      - .github/workflows/publish-windows.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-windows
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate executable and create checksum
+        shell: pwsh
+        run: |
+          $file = Get-Item -LiteralPath Ollama_Park.exe
+          if ($file.Length -eq 0 -or $file.Length -ge 100MB) { throw 'Invalid executable size.' }
+          $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw 'Expected a Windows executable, not an LFS pointer or HTML.' }
+          $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Ollama_Park.exe" | Set-Content -LiteralPath SHA256SUMS.txt -Encoding ascii
+          "SHA256: $hash" | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: Publish exact repository executable to latest release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          $tag = "windows-$env:COMMIT_SHA"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --target $env:COMMIT_SHA --draft --title "Ollama Desk Windows ($($env:COMMIT_SHA.Substring(0, 7)))" --notes "Windows executable from commit $env:COMMIT_SHA. See SHA256SUMS.txt to verify the download."
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create release.' }
+          }
+          gh release upload $tag Ollama_Park.exe SHA256SUMS.txt --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upload release assets.' }
+          gh release edit $tag --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish release.' }
+          "Download: https://github.com/$env:GH_REPO/releases/latest/download/Ollama_Park.exe" | Add-Content $env:GITHUB_STEP_SUMMARY

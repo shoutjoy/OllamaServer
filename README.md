@@ -16,7 +16,11 @@ Windows에서는 [Lemonade](https://lemonade-server.ai/docs/guide/install/window
 
 별도 Python 설치 없이 단일 파일 `Ollama_Park.exe`를 더블클릭하면 실행됩니다.
 
-**[Ollama_Park.exe 바로 다운로드](https://raw.githubusercontent.com/shoutjoy/OllamaServer/main/Ollama_Park.exe)**
+**[최신 Ollama_Park.exe 다운로드](https://github.com/shoutjoy/OllamaServer/releases/latest/download/Ollama_Park.exe)**
+
+Windows 다운로드는 GitHub Releases의 최신 배포 파일을 사용합니다. `main`의 `Ollama_Park.exe`가 변경되면 **Publish latest Windows executable** workflow가 저장소의 EXE를 그대로 업로드하고 최신 릴리스로 지정합니다. 실행 파일을 다시 빌드하지 않으므로 로컬에서 올린 파일과 배포 파일이 같습니다. [SHA256SUMS.txt](https://github.com/shoutjoy/OllamaServer/releases/latest/download/SHA256SUMS.txt)로 파일을 확인할 수 있습니다. 다운로드 폴더에 이전 파일이 있다면 새로 받은 파일의 이름에 `(1)` 등이 붙을 수 있으므로 새 파일을 실행하세요.
+
+배포 상태는 [GitHub Actions](https://github.com/shoutjoy/OllamaServer/actions/workflows/publish-windows.yml)에서 확인할 수 있습니다. 자동 배포 실패 시 오류를 해결한 뒤 **Run workflow → main → Run workflow**로 다시 배포합니다. workflow 실행이 성공해야 위 최신 다운로드 링크가 갱신됩니다.
 
 **[OllamaDesk Mac.dmg 다운로드](https://github.com/shoutjoy/OllamaServer/releases/download/mac-1.0/OllamaDesk-macOS.dmg)**
 
