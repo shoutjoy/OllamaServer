@@ -16,7 +16,7 @@ from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from urllib.parse import quote
 
-from core import ENGINE_LABELS, find_lemonade, effective_performance, model_placement, running_model_change, PERFORMANCE_DEFAULTS, validate_performance, performance_environment, chat_performance, Client, NO_WINDOW, fetch_tags, find_ollama, model_name, models_directory, search_models
+from core import ENGINE_LABELS, find_lemonade, effective_performance, model_placement, running_model_change, PERFORMANCE_DEFAULTS, validate_performance, gpu_preference_environment, preferred_nvidia_gpu, chat_performance, Client, NO_WINDOW, fetch_tags, find_ollama, model_name, models_directory, search_models
 from resource_monitor import ResourcePanel, ResourceSampler
 from memory_cleanup import clean_memory
 from dark_theme import apply_dark_theme
@@ -26,6 +26,7 @@ from install_commands import COMMANDS, install_args
 from install_terminal import InstallTerminalRunner
 from CHAT.serve_ollama_say import create_server as create_chat_server
 from open_webui_runner import start as start_open_webui, executable as open_webui_executable, install as install_open_webui
+from lemonade_installer import find_lemonade_cli, lemonade_install_args, fastflowlm_install_args
 
 SOURCE_ROOT = Path(__file__).resolve().parent
 RESOURCE_ROOT = Path(getattr(sys, '_MEIPASS', SOURCE_ROOT))
@@ -72,6 +73,8 @@ class App(tk.Tk):
         self.install_status = tk.StringVar(value='Ollama 설치 확인 중…')
         self.download_status = tk.StringVar(value='설치 파일 다운로드 대기')
         self.webui_install_status = tk.StringVar(value='설치됨' if open_webui_executable(self.webui_root()).is_file() else '미설치')
+        self.lemonade_install_status = tk.StringVar(value='설치됨' if find_lemonade() else '미설치')
+        self.fastflowlm_install_status = tk.StringVar(value='Lemonade Server 설치 후 설치 가능')
         self.selected = tk.StringVar()
         self.target = tk.StringVar(value='gemma3:1b')
         self.query = tk.StringVar()
@@ -168,7 +171,7 @@ class App(tk.Tk):
                                ('Open WebUI', self.open_webui),
                                ('MDpro', self.open_mdpro)]:
             ttk.Button(server, text=label, command=command).pack(side='left', padx=3)
-        self.install_nav_button = ttk.Button(server, text='앱 설치', command=self.show_install_tab)
+        self.install_nav_button = ttk.Button(server, text='Ollama 설치', command=self.show_install_tab)
         self.install_nav_button.pack(side='right', padx=3)
         self.resource_panel = ResourcePanel(outer)
         self.resource_panel.pack(fill='x', pady=(8, 0))
@@ -333,9 +336,25 @@ class App(tk.Tk):
     def show_install_tab(self):
         self.notebook.select(self.install_tab)
 
+    def show_ai_install_tab(self):
+        self.notebook.select(self.ai_install_tab)
+
     def build_install_tab(self):
+        self.ai_install_tab = ttk.Frame(self.notebook, padding=12)
+        self.notebook.add(self.ai_install_tab, text='  AI 엔진 · Open WebUI  ')
+        self.ai_install_canvas = tk.Canvas(self.ai_install_tab, bg='#111827', highlightthickness=0)
+        ai_scroll = ttk.Scrollbar(self.ai_install_tab, orient='vertical', command=self.ai_install_canvas.yview)
+        ai_scroll.pack(side='right', fill='y')
+        self.ai_install_canvas.configure(yscrollcommand=ai_scroll.set)
+        self.ai_install_canvas.pack(side='left', fill='both', expand=True)
+        ai_body = ttk.Frame(self.ai_install_canvas)
+        ai_body_window = self.ai_install_canvas.create_window((0, 0), window=ai_body, anchor='nw')
+        ai_body.bind('<Configure>', lambda _: self.ai_install_canvas.configure(scrollregion=self.ai_install_canvas.bbox('all')))
+        self.ai_install_canvas.bind('<Configure>', lambda event: self.ai_install_canvas.itemconfigure(
+            ai_body_window, width=event.width, height=max(event.height, ai_body.winfo_reqheight())))
+
         self.install_tab = ttk.Frame(self.notebook, padding=12)
-        self.notebook.add(self.install_tab, text='  Ollama · Open WebUI 설치  ')
+        self.notebook.add(self.install_tab, text='  Ollama 설치  ')
         self.install_canvas = tk.Canvas(self.install_tab, bg='#111827', highlightthickness=0)
         scroll = ttk.Scrollbar(self.install_tab, orient='vertical', command=self.install_canvas.yview)
         scroll.pack(side='right', fill='y')
@@ -346,7 +365,7 @@ class App(tk.Tk):
         body.bind('<Configure>', lambda _: self.install_canvas.configure(scrollregion=self.install_canvas.bbox('all')))
         self.install_canvas.bind('<Configure>', lambda event: self.install_canvas.itemconfigure(
             body_window, width=event.width, height=max(event.height, body.winfo_reqheight())))
-        webui = ttk.LabelFrame(body, text='Open WebUI 설치', padding=8)
+        webui = ttk.LabelFrame(ai_body, text='Open WebUI 설치', padding=8)
         webui.pack(fill='x', pady=(0, 8))
         webui_controls = ttk.Frame(webui)
         webui_controls.pack(fill='x')
@@ -354,6 +373,31 @@ class App(tk.Tk):
         ttk.Button(webui_controls, text='Open WebUI 열기', command=self.open_webui).pack(side='left', padx=8)
         ttk.Label(webui_controls, textvariable=self.webui_install_status).pack(side='left')
         ttk.Label(webui, text='Python 환경과 필요한 패키지를 자동 설치합니다. 첫 설치에는 시간이 걸릴 수 있습니다.\n설치 출력은 아래 터미널에 표시됩니다.').pack(anchor='w', pady=4)
+        lemonade = ttk.LabelFrame(ai_body, text='Lemonade Server · FastFlowLM 설치 (FLM: AMD XDNA 2 NPU 전용)', padding=4)
+        lemonade.pack(fill='x', pady=(0, 8))
+        lemonade_controls = ttk.Frame(lemonade)
+        lemonade_controls.pack(fill='x')
+        self.lemonade_install_button = ttk.Button(
+            lemonade_controls, text='Lemonade Server 설치', command=self.install_lemonade,
+            state='normal' if platform.system() == 'Windows' else 'disabled')
+        self.lemonade_install_button.pack(side='left')
+        ttk.Label(lemonade_controls, textvariable=self.lemonade_install_status).pack(side='left', padx=(8, 18))
+        self.fastflowlm_install_button = ttk.Button(
+            lemonade_controls, text='FastFlowLM 백엔드 설치', command=self.install_fastflowlm,
+            state='normal' if platform.system() == 'Windows' else 'disabled')
+        self.fastflowlm_install_button.pack(side='left')
+        ttk.Label(lemonade_controls, textvariable=self.fastflowlm_install_status).pack(side='left', padx=8)
+        self.ai_install_terminal_view = ScrolledText(ai_body, height=9, state='disabled', wrap='word',
+                                                    bg='#101827', fg='#d6e4f0', font=('Consolas', 10))
+        self.ai_install_terminal_view._theme_terminal = True
+        self.ai_install_terminal_view.pack(fill='both', expand=True, pady=5)
+        ai_terminal_controls = ttk.Frame(ai_body)
+        ai_terminal_controls.pack(fill='x')
+        self.ai_stop_terminal_button = ttk.Button(
+            ai_terminal_controls, text='설치 중지', command=self.stop_terminal_install, state='disabled')
+        self.ai_stop_terminal_button.pack(side='right')
+        self.ai_install_write('Lemonade Server 또는 FastFlowLM 설치 출력이 이곳에 표시됩니다.\n')
+
         download = ttk.LabelFrame(body, text='Windows 다운로드 앱으로 설치', padding=8)
         download.pack(fill='x')
         self.install_button = ttk.Button(download, text='Windows 다운로드 앱으로 설치', command=self.install,
@@ -400,6 +444,79 @@ class App(tk.Tk):
         self.stop_terminal_button.pack(side='left')
         self.install_terminal_write('설치 방법을 선택하세요. 출력은 이곳에 표시됩니다.\n입력란은 암호를 가려 표시하며 전송한 내용을 로그에 기록하지 않습니다.\n')
 
+    def set_ai_installer_buttons(self, state):
+        self.lemonade_install_button.configure(state=state if platform.system() == 'Windows' else 'disabled')
+        self.fastflowlm_install_button.configure(state=state if platform.system() == 'Windows' else 'disabled')
+
+    def ai_install_write(self, text):
+        self.append(self.ai_install_terminal_view, ANSI.sub('', text).replace('\r', '\n'), max_chars=200000)
+        if int(self.ai_install_terminal_view.index('end-1c').split('.')[0]) > 6000:
+            self.ai_install_terminal_view.configure(state='normal')
+            self.ai_install_terminal_view.delete('1.0', '1000.0')
+            self.ai_install_terminal_view.configure(state='disabled')
+
+    def run_ai_installer(self, key, label, args, status_var, complete_text):
+        if self.install_terminal_active or {'console', 'installer', 'pull', 'chat', 'server'} & self.busy:
+            messagebox.showinfo('작업 진행 중', '현재 작업을 완료하거나 중지한 뒤 설치하세요.', parent=self)
+            return
+        self.console_runner = InstallTerminalRunner()
+        runner = self.console_runner
+        self.install_terminal_active = True
+        self.install_button.configure(state='disabled')
+        for button in self.script_buttons.values():
+            button.configure(state='disabled')
+        self.set_ai_installer_buttons('disabled')
+        self.install_output_kind = 'ai'
+        self.ai_stop_terminal_button.configure(state='normal')
+        self.ai_install_canvas.yview_moveto(1)
+        status_var.set('설치 중…')
+        self.ai_install_write('\n> ' + ' '.join(shlex.quote(part) for part in args) + '\n')
+        def work():
+            try:
+                code = runner.run(args, lambda text: self.emit(self.ai_install_write, text))
+                if runner.cancel.is_set():
+                    self.emit(status_var.set, '설치 중지됨')
+                    return
+                if code:
+                    raise RuntimeError(f'{label} 설치 실패 · 종료 코드 {code}')
+                self.emit(status_var.set, complete_text)
+                self.emit(self.ai_install_write, f'\n[{complete_text}]\n')
+            except Exception:
+                self.emit(status_var.set, '설치 실패 · 출력 확인')
+                raise
+            finally:
+                self.emit(self.terminal_install_finished)
+        self.job(key, work, quiet=False)
+
+    def install_lemonade(self):
+        self.show_ai_install_tab()
+        try:
+            args = lemonade_install_args()
+        except ValueError as exc:
+            if messagebox.askyesno('Lemonade Server 설치', str(exc) + '\n\n공식 다운로드 페이지를 열까요?', parent=self):
+                webbrowser.open('https://lemonade-server.ai/docs/server/installation/')
+            return
+        if not messagebox.askyesno('Lemonade Server 설치',
+                'WinGet을 통해 공식 Lemonade Server 패키지를 설치하거나 업데이트합니다.\n시스템이 변경되며 설치 약관에 동의하게 됩니다. 계속할까요?', parent=self):
+            return
+        self.run_ai_installer('lemonade-install', 'Lemonade Server', args,
+                              self.lemonade_install_status, 'Lemonade Server 설치 완료')
+
+    def install_fastflowlm(self):
+        self.show_ai_install_tab()
+        try:
+            args = fastflowlm_install_args(find_lemonade())
+        except ValueError as exc:
+            messagebox.showerror('FastFlowLM 백엔드 설치', str(exc), parent=self)
+            return
+        warning = ('FastFlowLM은 AMD Ryzen AI XDNA 2 NPU 전용입니다.\n'
+                   'Intel NPU, NVIDIA GPU, XDNA 1 NPU에서는 동작하지 않습니다.\n'
+                   '호환 NPU와 최신 AMD NPU 드라이버가 설치되어 있습니까?')
+        if not messagebox.askyesno('FastFlowLM 백엔드 설치', warning, parent=self):
+            return
+        self.run_ai_installer('fastflowlm-install', 'FastFlowLM 백엔드', args,
+                              self.fastflowlm_install_status, 'FastFlowLM 백엔드 설치 완료')
+
     def copy_install_command(self, system):
         self.clipboard_clear()
         self.clipboard_append(COMMANDS[system])
@@ -424,14 +541,17 @@ class App(tk.Tk):
     def stop_terminal_install(self):
         if self.install_terminal_active:
             self.stop_terminal_button.configure(state='disabled')
-            self.install_terminal_write('\n[중지 요청 · 설치된 파일은 자동으로 제거되지 않습니다.]\n')
+            self.ai_stop_terminal_button.configure(state='disabled')
+            writer = self.ai_install_write if getattr(self, 'install_output_kind', 'ollama') == 'ai' else self.install_terminal_write
+            writer('\n[중지 요청 · 설치된 파일은 자동으로 제거되지 않습니다.]\n')
             runner = self.console_runner
             def stop():
                 try:
                     runner.stop()
                 except Exception as exc:
-                    self.emit(self.install_terminal_write, f'\n[중지 실패] {exc}\n')
-                    self.emit(lambda: self.stop_terminal_button.configure(state='normal')
+                    self.emit(writer, f'\n[중지 실패] {exc}\n')
+                    self.emit(lambda: (self.ai_stop_terminal_button if getattr(self, 'install_output_kind', 'ollama') == 'ai'
+                                       else self.stop_terminal_button).configure(state='normal')
                               if self.install_terminal_active and self.console_runner is runner else None)
             threading.Thread(target=stop, daemon=True).start()
 
@@ -439,9 +559,11 @@ class App(tk.Tk):
         self.install_terminal_active = False
         self.install_input.delete(0, 'end')
         self.stop_terminal_button.configure(state='disabled')
+        self.ai_stop_terminal_button.configure(state='disabled')
         self.install_button.configure(state='normal' if platform.system() == 'Windows' else 'disabled')
         for system, button in self.script_buttons.items():
             button.configure(state='normal' if system == platform.system() else 'disabled')
+        self.set_ai_installer_buttons('normal')
         self.refresh()
 
     def start_terminal_install(self, system):
@@ -459,9 +581,11 @@ class App(tk.Tk):
         self.console_runner = InstallTerminalRunner()
         runner = self.console_runner
         self.install_terminal_active = True
+        self.install_output_kind = 'ollama'
         self.install_button.configure(state='disabled')
         for button in self.script_buttons.values():
             button.configure(state='disabled')
+        self.set_ai_installer_buttons('disabled')
         self.stop_terminal_button.configure(state='normal')
         self.install_canvas.yview_moveto(1)
         self.install_terminal_write('\n> ' + COMMANDS[system] + '\n')
@@ -510,10 +634,10 @@ class App(tk.Tk):
 
     def webui_progress(self, text):
         self.webui_install_status.set(text[:100])
-        self.install_terminal_write(text + '\n')
+        self.ai_install_write(text + '\n')
 
     def install_webui(self):
-        self.show_install_tab()
+        self.show_ai_install_tab()
         if 'open-webui' in self.busy:
             return
         root = self.webui_root()
@@ -643,7 +767,7 @@ class App(tk.Tk):
 
     def console_execute(self, _=None):
         if self.install_terminal_active:
-            self.show_install_tab()
+            self.show_ai_install_tab() if getattr(self, 'install_output_kind', 'ollama') == 'ai' else self.show_install_tab()
             return 'break'
         text = self.command.get().strip()
         if not text:
@@ -733,7 +857,7 @@ class App(tk.Tk):
     def trim_log_views(self):
         # Keep conversation widgets and self.history intact. Full access logs
         # remain on disk; only the displayed tail is bounded.
-        for name in ('log_view', 'console_view', 'access_log_view', 'install_terminal_view'):
+        for name in ('log_view', 'console_view', 'access_log_view', 'install_terminal_view', 'ai_install_terminal_view'):
             widget = getattr(self, name, None)
             if widget is None:
                 continue
@@ -764,7 +888,7 @@ class App(tk.Tk):
         self.log(f'{key}: {text}')
         if key == 'open-webui':
             self.webui_install_status.set('실패 · 다시 시도해주세요')
-            self.install_terminal_write(text + '\n')
+            self.ai_install_write(text + '\n')
         if key == 'pull':
             self.progress_text.set(text)
         if key == 'chat':
@@ -819,6 +943,11 @@ class App(tk.Tk):
         if 'installer' not in self.busy:
             exe = find_lemonade() if self.engine == 'lemonade' else find_ollama()
             self.install_status.set(ENGINE_LABELS[self.engine] + ' · 설치 위치: ' + (exe or '미설치'))
+        lemonade_exe = find_lemonade()
+        if 'lemonade-install' not in self.busy:
+            self.lemonade_install_status.set('설치됨' if lemonade_exe else '미설치')
+        if 'fastflowlm-install' not in self.busy:
+            self.fastflowlm_install_status.set('설치 가능' if find_lemonade_cli(lemonade_exe) else 'Lemonade Server 설치 필요')
         def work():
             try:
                 version = self.client.get('/api/version')['version']
@@ -1057,12 +1186,14 @@ class App(tk.Tk):
         # The server only listens on loopback. Allow browser-based chat UIs
         # served from any local origin to call the Ollama API directly.
         env = dict(os.environ, OLLAMA_HOST='127.0.0.1:11434', OLLAMA_ORIGINS='*')
-        env.update(performance_environment(settings))
+        nvidia_uuid = preferred_nvidia_gpu()
+        env.update(gpu_preference_environment(settings, nvidia_uuid))
         with (DATA / 'server.log').open('ab') as output:
             offset = output.tell()
             self.process = subprocess.Popen([exe, 'serve'], env=env, stdout=output,
                                             stderr=output, creationflags=NO_WINDOW)
-        self.emit(self.console_write, '> ollama serve\n')
+        gpu_note = f' · NVIDIA 외장 GPU 우선 ({nvidia_uuid})' if nvidia_uuid else ''
+        self.emit(self.console_write, '> ollama serve' + gpu_note + '\n')
         self.follow_server_log(self.process, offset)
         for _ in range(30):
             try:

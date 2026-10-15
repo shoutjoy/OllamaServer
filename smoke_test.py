@@ -67,9 +67,9 @@ with patch('app.Client.get', side_effect=get), patch('app.Client.stream', side_e
         webui_exe.return_value.is_file.return_value = False
         app.install_webui()
         settle()
-        assert app.notebook.select() == str(app.install_tab)
+        assert app.notebook.select() == str(app.ai_install_tab)
         assert '설치 완료' in app.webui_install_status.get()
-        assert '테스트 설치 출력' in app.install_terminal_view.get('1.0', 'end')
+        assert '테스트 설치 출력' in app.ai_install_terminal_view.get('1.0', 'end')
     app.resource_panel.update_sample({'connected': 100, 'gpu': 40, 'cpu': 25, 'ram': 50, 'ram_detail': '8 / 16 GB'})
     app.resource_panel.update_sample({'connected': 0, 'gpu': None, 'cpu': 30, 'ram': 55})
     app.update()
