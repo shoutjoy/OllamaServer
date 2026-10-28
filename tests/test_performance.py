@@ -1,5 +1,8 @@
 import unittest
-from core import model_placement, PERFORMANCE_DEFAULTS, validate_performance, performance_environment, chat_performance
+from unittest.mock import patch
+from core import (model_placement, PERFORMANCE_DEFAULTS, validate_performance,
+                  performance_environment, gpu_preference_environment,
+                  preferred_nvidia_gpu, chat_performance)
 
 
 class PerformanceTests(unittest.TestCase):
@@ -46,6 +49,19 @@ class IntegratedGpuTests(unittest.TestCase):
         for settings in ({'num_gpu': -2}, {'max_loaded_models': 0}, {'integrated_gpu': '1'}):
             with self.assertRaises(ValueError):
                 validate_performance(settings)
+
+    def test_nvidia_gpu_takes_priority_over_integrated_gpu(self):
+        env = gpu_preference_environment(
+            {'integrated_gpu': True}, 'GPU-12345678-abcd')
+        self.assertEqual(env['CUDA_VISIBLE_DEVICES'], 'GPU-12345678-abcd')
+        self.assertEqual(env['OLLAMA_IGPU_ENABLE'], '0')
+        self.assertEqual(env['OLLAMA_VULKAN'], '0')
+
+    @patch('core.shutil.which', return_value='nvidia-smi.exe')
+    @patch('core.subprocess.check_output', return_value='GPU-first\nGPU-second\n')
+    def test_detects_first_nvidia_gpu_uuid(self, check_output, _which):
+        self.assertEqual(preferred_nvidia_gpu(), 'GPU-first')
+        self.assertIn('--query-gpu=uuid', check_output.call_args.args[0])
 
     def test_placement_is_model_memory_not_gpu_busy_percent(self):
         self.assertIn('모델 미로드', model_placement([]))

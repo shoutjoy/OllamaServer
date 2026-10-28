@@ -3,6 +3,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -202,6 +203,34 @@ def performance_environment(values):
     }
     if settings['integrated_gpu']:
         environment.update(OLLAMA_IGPU_ENABLE='1', OLLAMA_VULKAN='1')
+    return environment
+
+
+def preferred_nvidia_gpu():
+    """Return the first CUDA GPU UUID reported by the NVIDIA driver."""
+    executable = shutil.which('nvidia-smi')
+    if not executable and os.name == 'nt':
+        candidate = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/nvidia-smi.exe'
+        executable = str(candidate) if candidate.is_file() else None
+    if not executable:
+        return None
+    try:
+        output = subprocess.check_output(
+            [executable, '--query-gpu=uuid', '--format=csv,noheader,nounits'],
+            text=True, encoding='utf-8', errors='replace', timeout=5,
+            creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return next((line.strip() for line in output.splitlines()
+                 if line.strip().startswith('GPU-')), None)
+
+
+def gpu_preference_environment(values, nvidia_uuid=None):
+    """Prefer CUDA over the optional integrated-GPU Vulkan backend."""
+    environment = performance_environment(values)
+    if nvidia_uuid:
+        environment.update(CUDA_VISIBLE_DEVICES=nvidia_uuid,
+                           OLLAMA_IGPU_ENABLE='0', OLLAMA_VULKAN='0')
     return environment
 
 
