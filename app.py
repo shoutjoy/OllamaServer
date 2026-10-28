@@ -19,6 +19,7 @@ from urllib.parse import quote
 from core import ENGINE_LABELS, find_lemonade, effective_performance, model_placement, running_model_change, PERFORMANCE_DEFAULTS, validate_performance, performance_environment, chat_performance, Client, NO_WINDOW, fetch_tags, find_ollama, model_name, models_directory, search_models
 from resource_monitor import ResourcePanel, ResourceSampler
 from memory_cleanup import clean_memory
+from windows_desktop import TrayIcon, startup_enabled, set_startup
 from dark_theme import apply_dark_theme
 from console_runner import ANSI, ConsoleRunner
 from installer_download import DownloadCancelled, download_installer
@@ -79,6 +80,9 @@ class App(tk.Tk):
         self.model_profiles = {}
         self.ui_theme = 'dark'
         self.performance = dict(PERFORMANCE_DEFAULTS)
+        self.tray_icon = None
+        self.tray_enabled = tk.BooleanVar(value=False)
+        self.startup_enabled = tk.BooleanVar(value=startup_enabled())
         try:
             saved = json.loads((DATA / 'settings.json').read_text('utf-8'))
             self.engine = saved.get('engine', 'ollama') if saved.get('engine') in ENGINE_LABELS else 'ollama'
@@ -87,13 +91,16 @@ class App(tk.Tk):
             self.performance = validate_performance(saved.get('performance', {}))
             self.model_profiles = saved.get('model_profiles', {})
             self.selected.set(saved.get('model', ''))
+            self.tray_enabled.set(bool(saved.get('tray_enabled', False)))
         except (OSError, ValueError):
             pass
         self.build()
         apply_dark_theme(self, self.ui_theme)
         self.monitor_stop = threading.Event()
         threading.Thread(target=self.monitor_resources, daemon=True).start()
-        self.protocol('WM_DELETE_WINDOW', self.close)
+        self.protocol('WM_DELETE_WINDOW', self.hide_or_close)
+        if os.name == 'nt' and self.tray_enabled.get():
+            self.after(100, self.initialize_tray)
         self.after(80, self.drain)
         self.refresh()
         self.after(5000, self.poll)
@@ -140,6 +147,13 @@ class App(tk.Tk):
             child._theme_surface = True
         self.theme_button = ttk.Button(brand, text='일반모드로 전환' if self.ui_theme == 'dark' else '다크모드로 전환', command=self.toggle_theme)
         self.theme_button.pack(side='bottom', pady=24)
+        desktop_options = ttk.Frame(brand, padding=8)
+        desktop_options.pack(side='bottom', fill='x')
+        for label, variable, command in [
+                ('Windows 시작 시 실행', self.startup_enabled, self.toggle_startup),
+                ('시스템 트레이 사용 (닫아도 유지)', self.tray_enabled, self.toggle_tray)]:
+            ttk.Checkbutton(desktop_options, text=label, variable=variable,
+                            command=command, state='normal' if os.name == 'nt' else 'disabled').pack(anchor='w', pady=4)
 
         outer = ttk.Frame(shell, padding=22)
         outer.pack(side='left', fill='both', expand=True)
@@ -969,7 +983,7 @@ class App(tk.Tk):
             self.model_profiles[model] = settings
             DATA.mkdir(exist_ok=True)
             (DATA / 'settings.json').write_text(json.dumps({'engine': self.engine, 'theme': self.ui_theme, 'model': model, 'performance': self.performance,
-                'model_profiles': self.model_profiles}, ensure_ascii=False), 'utf-8')
+                'model_profiles': self.model_profiles, 'tray_enabled': self.tray_enabled.get()}, ensure_ascii=False), 'utf-8')
             self.log(model + ' 성능 프로필 저장: 관리자 대화와 CHAT 다음 요청부터 적용')
         except (ValueError, OSError) as exc:
             messagebox.showerror('설정 저장 실패', str(exc), parent=self)
@@ -1020,7 +1034,7 @@ class App(tk.Tk):
         try:
             settings = validate_performance({key: var.get() for key, var in self.performance_vars.items()})
             DATA.mkdir(exist_ok=True)
-            (DATA / 'settings.json').write_text(json.dumps({'engine': self.engine, 'theme': self.ui_theme, 'model': self.selected.get(), 'performance': settings, 'model_profiles': self.model_profiles}, ensure_ascii=False), 'utf-8')
+            (DATA / 'settings.json').write_text(json.dumps({'engine': self.engine, 'theme': self.ui_theme, 'model': self.selected.get(), 'performance': settings, 'model_profiles': self.model_profiles, 'tray_enabled': self.tray_enabled.get()}, ensure_ascii=False), 'utf-8')
         except (ValueError, OSError) as exc:
             messagebox.showerror('설정 저장 실패', str(exc), parent=self)
             return
@@ -1114,13 +1128,28 @@ class App(tk.Tk):
 
     def stop_server_worker(self, owned):
         if self.client.engine == 'lemonade':
-            # Unload the backend before closing the tray/server so the NPU process exits.
-            self.client.post('/api/v1/unload', {})
+            # A stalled/unavailable HTTP server must not prevent quitting the tray.
+            try:
+                self.client.post('/api/v1/unload', {}, timeout=5)
+            except Exception:
+                pass
             exe = find_lemonade()
             if not exe or os.name != 'nt':
-                raise RuntimeError('Lemonade 트레이 메뉴에서 서버를 종료하세요.')
+                raise RuntimeError('Lemonade 실행 파일을 찾을 수 없어 종료하지 못했습니다.')
             path = str(Path(exe).resolve()).replace("'", "''")
-            script = "$p='" + path + "'; Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $p } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop }"
+            # Query executable paths without WMI/CIM, and limit termination to this install.
+            # /T also closes the FLM/backend children owned by the server.
+            script = ("$ErrorActionPreference='Stop'; $p='" + path + "'; "
+                      "$targets=@(Get-Process -Name LemonadeServer -ErrorAction SilentlyContinue | "
+                      "Where-Object { $_.Path -eq $p }); "
+                      "foreach ($target in $targets) { "
+                      "& taskkill.exe /PID $target.Id /T /F | Out-Null; "
+                      "if ($LASTEXITCODE -ne 0 -and (Get-Process -Id $target.Id -ErrorAction SilentlyContinue)) "
+                      "{ throw 'Lemonade process termination failed' } }; "
+                      "foreach ($target in $targets) { Wait-Process -Id $target.Id -Timeout 10 -ErrorAction SilentlyContinue }; "
+                      "$remaining=@(Get-Process -Name LemonadeServer -ErrorAction SilentlyContinue | "
+                      "Where-Object { $_.Path -eq $p }); "
+                      "if ($remaining.Count) { throw 'Lemonade tray is still running' }")
             subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
                            check=True, capture_output=True, creationflags=NO_WINDOW, timeout=20)
             self.process = None
@@ -1446,7 +1475,7 @@ class App(tk.Tk):
     def select_model(self, _=None):
         DATA.mkdir(exist_ok=True)
         try:
-            (DATA / 'settings.json').write_text(json.dumps({'engine': self.engine, 'theme': self.ui_theme, 'model': self.selected.get(), 'performance': self.performance, 'model_profiles': self.model_profiles}, ensure_ascii=False), 'utf-8')
+            (DATA / 'settings.json').write_text(json.dumps({'engine': self.engine, 'theme': self.ui_theme, 'model': self.selected.get(), 'performance': self.performance, 'model_profiles': self.model_profiles, 'tray_enabled': self.tray_enabled.get()}, ensure_ascii=False), 'utf-8')
         except OSError as exc:
             self.log('설정 저장 실패: ' + str(exc))
         if self.selected.get():
@@ -1511,6 +1540,61 @@ class App(tk.Tk):
         self.job('chat', work, done)
         return 'break'
 
+    def write_settings(self, settings):
+        path = DATA / 'settings.json'
+        DATA.mkdir(parents=True, exist_ok=True)
+        settings['tray_enabled'] = self.tray_enabled.get()
+        path.write_text(json.dumps(settings, ensure_ascii=False), 'utf-8')
+
+    def toggle_startup(self):
+        try:
+            set_startup(self.startup_enabled.get())
+        except OSError as exc:
+            self.startup_enabled.set(startup_enabled())
+            messagebox.showerror('자동 실행 설정 실패', str(exc), parent=self)
+
+    def initialize_tray(self):
+        if self.toggle_tray() and '--startup' in sys.argv:
+            self.withdraw()
+
+    def toggle_tray(self):
+        try:
+            if self.tray_enabled.get() and self.tray_icon is None:
+                icon = TrayIcon(RESOURCE_ROOT / 'Icon' / 'Ollama.ico',
+                                lambda: self.emit(self.show_window),
+                                lambda: self.emit(self.close))
+                try:
+                    icon.start()
+                except OSError:
+                    icon.stop()
+                    raise
+                self.tray_icon = icon
+            elif not self.tray_enabled.get() and self.tray_icon is not None:
+                self.show_window()
+                self.tray_icon.stop()
+                self.tray_icon = None
+            path = DATA / 'settings.json'
+            saved = json.loads(path.read_text('utf-8')) if path.exists() else {}
+            self.write_settings(saved)
+            return True
+        except (OSError, ValueError) as exc:
+            self.tray_enabled.set(self.tray_icon is not None)
+            self.show_window()
+            messagebox.showerror('트레이 설정 실패', str(exc), parent=self)
+            return False
+
+    def show_window(self):
+        self.deiconify()
+        self.state('normal')
+        self.lift()
+        self.focus_force()
+
+    def hide_or_close(self):
+        if self.tray_icon is not None and self.tray_enabled.get():
+            self.withdraw()
+        else:
+            self.close()
+
     def close(self):
         active = self.busy - {'refresh'}
         if active and not messagebox.askyesno('작업 진행 중', '진행 중인 작업의 연결이 끊어집니다. 앱을 닫을까요?\nOllama 서버와 실행 중인 설치 마법사는 유지됩니다.'):
@@ -1523,6 +1607,8 @@ class App(tk.Tk):
             messagebox.showerror('작업 중지 실패', str(exc), parent=self)
             return
         self.closed = True
+        if self.tray_icon is not None:
+            self.tray_icon.stop()
         self.monitor_stop.set()
         self.destroy()
 
