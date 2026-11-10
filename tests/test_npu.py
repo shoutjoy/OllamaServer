@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from core import Client, BASE_URL, LEMONADE_URL, model_placement
-from app import App
+from app import App, RECOMMENDED_MODELS
 from CHAT import serve_ollama_say as chat
 from console_runner import ConsoleRunner
 
@@ -46,14 +46,16 @@ class NpuTests(unittest.TestCase):
         data = {'model': 'gemma3:1b', 'think': False, 'options': {'num_gpu': 0}}
         self.assertIs(Client().prepare_chat(data), data)
 
-    def test_catalog_only_offers_npu_chat_models(self):
+    def test_catalog_offers_all_lemonade_chat_models(self):
         app = Mock()
         app.client.get.return_value = {'data': [
             {'id': 'qwen-FLM', 'recipe': 'flm', 'labels': ['chat'], 'size': 3},
             {'id': 'embed-FLM', 'recipe': 'flm', 'labels': ['embeddings']},
             {'id': 'whisper-FLM', 'recipe': 'flm', 'labels': ['transcription']},
             {'id': 'qwen-GGUF', 'recipe': 'llamacpp', 'labels': ['chat']}]}
-        self.assertEqual(App.npu_catalog(app, 'QWEN'), [('qwen-FLM', 'FastFlowLM · NPU · 3 GB')])
+        self.assertEqual(App.npu_catalog(app, 'QWEN'), [
+            ('qwen-FLM', 'Lemonade · FastFlowLM NPU · 3 GB'),
+            ('qwen-GGUF', 'Lemonade · LLAMACPP · ? GB')])
 
     def test_npu_start_loads_downloaded_model_without_spawning(self):
         app = Mock()
@@ -81,6 +83,20 @@ class NpuTests(unittest.TestCase):
         with patch('console_runner.subprocess.Popen', return_value=process) as spawn, patch('console_runner.os.read', return_value=b''):
             runner.run(['ollama', 'list'], lambda text: None)
         self.assertEqual(spawn.call_args.kwargs['env']['OLLAMA_HOST'], LEMONADE_URL)
+
+    def test_recommended_models_use_engine_specific_names(self):
+        lemonade = [model for _, model, _ in RECOMMENDED_MODELS['lemonade']]
+        ollama = [model for _, model, _ in RECOMMENDED_MODELS['ollama']]
+        self.assertEqual(lemonade, ['Gemma-4-E2B-it-GGUF', 'Gemma-4-E4B-it-GGUF', 'Gemma-4-12B-it-GGUF'])
+        self.assertEqual(ollama, ['gemma4:e2b', 'gemma4:e4b', 'gemma4:12b'])
+
+    def test_recommended_install_selects_then_pulls(self):
+        app = Mock()
+        app.target.get.return_value = ''
+        App.install_recommended_model(app, 'gemma4:e2b')
+        app.target.set.assert_called_once_with('gemma4:e2b')
+        app.tags.set.assert_called_once_with('e2b')
+        app.pull.assert_called_once_with()
 
 
 if __name__ == '__main__':

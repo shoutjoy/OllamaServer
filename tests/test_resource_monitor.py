@@ -2,7 +2,8 @@ import unittest
 import json
 import subprocess
 from unittest.mock import patch
-from resource_monitor import cpu_percent, gpu_engine_percent, ResourceSampler
+from resource_monitor import (cpu_percent, gpu_engine_percent, model_fit,
+                              model_size_gb, ResourceSampler)
 
 
 class ResourceTests(unittest.TestCase):
@@ -53,3 +54,11 @@ class DeviceTests(unittest.TestCase):
                                      {'id': 'luid_0x00000000_0x00000002', 'name': 'Intel UHD Graphics'}])
         self.assertEqual([d['kind'] for d in devices], ['외장', '내장'])
         self.assertEqual([d['usage'] for d in devices], [60, 20])
+
+    def test_model_size_and_fit_classification(self):
+        capacity = {'vram_free_gb': 8, 'ram_available_gb': 16}
+        self.assertEqual(model_size_gb('Lemonade · LLAMACPP · 5.97 GB'), 5.97)
+        self.assertIn('FIT', model_fit(4, capacity))
+        self.assertIn('PARTIAL', model_fit(10, capacity))
+        self.assertIn('OFFLOAD', model_fit(4, {'vram_free_gb': 0, 'ram_available_gb': 16}))
+        self.assertIn('부족', model_fit(20, {'vram_free_gb': 0, 'ram_available_gb': 8}))

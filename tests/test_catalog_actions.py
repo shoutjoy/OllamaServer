@@ -53,3 +53,11 @@ class CatalogActionsTests(unittest.TestCase):
         with patch('app.messagebox.showinfo') as info:
             self.assertIsNone(App.selected_catalog_result(app))
         info.assert_called_once()
+
+    def test_install_selected_catalog_model(self):
+        app = self.make_app()
+        app.engine = 'lemonade'
+        app.selected_catalog_result.return_value = ('Gemma-4-E2B-it-GGUF', 'FIT', '4.09 GB')
+        App.install_catalog_model(app)
+        app.target.set.assert_called_once_with('Gemma-4-E2B-it-GGUF')
+        app.pull.assert_called_once_with()

@@ -12,7 +12,7 @@ from pathlib import Path
 
 BASE_URL = 'http://127.0.0.1:11434'
 LEMONADE_URL = 'http://127.0.0.1:13305'
-ENGINE_LABELS = {'ollama': 'Ollama · CPU/GPU', 'lemonade': 'Lemonade · FastFlowLM NPU'}
+ENGINE_LABELS = {'ollama': 'Ollama · CPU/GPU', 'lemonade': 'Lemonade · CPU/GPU/NPU'}
 
 
 def engine_url(engine):

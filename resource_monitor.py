@@ -14,6 +14,68 @@ from ctypes import wintypes
 NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 
 
+def hardware_capacity():
+    """Return memory capacity used for conservative model-fit estimates."""
+    result = {'cpu_threads': os.cpu_count() or 1, 'ram_total_gb': 0.0,
+              'ram_available_gb': 0.0, 'vram_total_gb': 0.0,
+              'vram_free_gb': 0.0, 'gpu_name': ''}
+    if os.name == 'nt':
+        try:
+            memory = MemoryStatus()
+            memory.length = ctypes.sizeof(memory)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memory)):
+                result['ram_total_gb'] = memory.total / 2**30
+                result['ram_available_gb'] = memory.available / 2**30
+        except (OSError, AttributeError):
+            pass
+    executable = shutil.which('nvidia-smi')
+    if executable:
+        try:
+            output = subprocess.check_output([
+                executable, '--query-gpu=name,memory.total,memory.free',
+                '--format=csv,noheader,nounits'], text=True, encoding='utf-8',
+                errors='replace', timeout=4, creationflags=NO_WINDOW)
+            devices = []
+            for line in output.splitlines():
+                parts = [part.strip() for part in line.split(',')]
+                if len(parts) == 3:
+                    devices.append((parts[0], float(parts[1]) / 1024,
+                                    float(parts[2]) / 1024))
+            if devices:
+                name, total, free = max(devices, key=lambda item: item[2])
+                result.update(gpu_name=name, vram_total_gb=total, vram_free_gb=free)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+    return result
+
+
+def model_size_gb(description):
+    """Extract a catalog download size without confusing it with parameter counts."""
+    matches = re.findall(r'(\d+(?:\.\d+)?)\s*(TB|GB|MB)\b', description or '', re.I)
+    if not matches:
+        return None
+    value, unit = matches[-1]
+    return float(value) * {'MB': 1 / 1024, 'GB': 1, 'TB': 1024}[unit.upper()]
+
+
+def model_fit(size_gb, capacity, npu=False):
+    """Classify expected placement; model size is expanded for runtime overhead."""
+    if npu:
+        return 'NPU · 지원 장치 확인'
+    if not size_gb:
+        return '미확인 · 태그 크기 필요'
+    required = size_gb * 1.2
+    vram = max(0.0, capacity.get('vram_free_gb', 0.0))
+    ram = max(0.0, capacity.get('ram_available_gb', 0.0))
+    if vram >= required:
+        return 'FIT · VRAM 전체 적재'
+    if vram >= min(1.0, required * .15) and vram + ram * .7 >= required:
+        return 'PARTIAL · GPU+RAM 분할'
+    if ram * .7 >= required:
+        return 'OFFLOAD · CPU/RAM 실행'
+    return '부족 · 더 많은 RAM/VRAM 필요'
+
+
 def cpu_percent(previous, current):
     if previous is None:
         return None

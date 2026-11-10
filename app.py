@@ -17,7 +17,8 @@ from tkinter.scrolledtext import ScrolledText
 from urllib.parse import quote
 
 from core import ENGINE_LABELS, find_lemonade, effective_performance, model_placement, running_model_change, PERFORMANCE_DEFAULTS, validate_performance, gpu_preference_environment, preferred_nvidia_gpu, chat_performance, Client, NO_WINDOW, fetch_tags, find_ollama, model_name, models_directory, search_models
-from resource_monitor import ResourcePanel, ResourceSampler
+from resource_monitor import (ResourcePanel, ResourceSampler, hardware_capacity,
+                              model_fit, model_size_gb)
 from memory_cleanup import clean_memory
 from dark_theme import apply_dark_theme
 from console_runner import ANSI, ConsoleRunner
@@ -33,6 +34,18 @@ RESOURCE_ROOT = Path(getattr(sys, '_MEIPASS', SOURCE_ROOT))
 DATA = ((Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'OllamaDesk')
         if getattr(sys, 'frozen', False) else SOURCE_ROOT / '.data')
 MDPRO_URL = 'https://mdproviewer.vercel.app/'
+RECOMMENDED_MODELS = {
+    'lemonade': [
+        ('Gemma 4 E2B', 'Gemma-4-E2B-it-GGUF', 'CPU/GPU · 가벼운 권장 모델'),
+        ('Gemma 4 E4B', 'Gemma-4-E4B-it-GGUF', 'CPU/GPU · 품질/속도 균형'),
+        ('Gemma 4 12B', 'Gemma-4-12B-it-GGUF', 'CPU/GPU · 고품질 · 약 7.3 GB 다운로드'),
+    ],
+    'ollama': [
+        ('Gemma 4 E2B', 'gemma4:e2b', 'CPU/GPU · 가벼운 권장 모델'),
+        ('Gemma 4 E4B', 'gemma4:e4b', 'CPU/GPU · 품질/속도 균형'),
+        ('Gemma 4 12B', 'gemma4:12b', 'CPU/GPU · 고품질 · 약 8 GB 다운로드'),
+    ],
+}
 
 
 class App(tk.Tk):
@@ -156,7 +169,7 @@ class App(tk.Tk):
                                             values=list(ENGINE_LABELS.values()), state='readonly', width=36)
         self.engine_selector.pack(side='left')
         self.engine_selector.bind('<<ComboboxSelected>>', self.change_engine)
-        ttk.Label(engine_row, text='NPU 사용: Lemonade 선택 → 서버 시작 → FLM 모델 선택').pack(side='left', padx=12)
+        ttk.Label(engine_row, text='Lemonade: CPU/GPU GGUF 또는 지원되는 XDNA 2 NPU의 FLM 모델').pack(side='left', padx=12)
         server = ttk.LabelFrame(outer, text='로컬 서버 · ' + self.client.base_url, padding=12)
         self.server_frame = server
         server.pack(fill='x')
@@ -202,10 +215,13 @@ class App(tk.Tk):
         self.build_performance(performance_tab)
         self.notebook = notebook
         notebook.pack(fill='both', expand=True)
+        recommendations = ttk.Frame(notebook, padding=14)
         catalog = ttk.Frame(notebook, padding=14)
+        self.catalog_tab = catalog
         chat = ttk.Frame(notebook, padding=14)
         logs = ttk.Frame(notebook, padding=14)
-        notebook.add(catalog, text='  모델 검색 · 설치  ')
+        notebook.add(recommendations, text='  추천 모델 설치  ')
+        notebook.add(catalog, text='  공식 모델 검색  ')
         notebook.add(chat, text='  대화  ')
         notebook.add(logs, text='  작업 로그  ')
         self.build_install_tab()
@@ -244,21 +260,38 @@ class App(tk.Tk):
         self.access_log_view.pack(fill='both', expand=True)
         self.load_access_log()
         self.access_log('APP', 'Ollama Desk 실행')
+        self.recommendations_tab = recommendations
+        ttk.Label(recommendations, text='선택한 AI 엔진에서 바로 사용할 수 있는 추천 모델입니다. 설치 버튼을 누르면 앱 내부에서 다운로드합니다.').pack(anchor='w', pady=(0, 10))
+        self.recommended_frame = ttk.LabelFrame(recommendations, padding=8)
+        self.recommended_frame.pack(fill='x', pady=(0, 10))
+        self.refresh_recommended_models()
+        self.recommended_progress = ttk.Progressbar(recommendations, maximum=100)
+        self.recommended_progress.pack(fill='x', pady=(8, 7))
+        ttk.Label(recommendations, textvariable=self.progress_text, wraplength=900).pack(anchor='w')
         row = ttk.Frame(catalog)
         row.pack(fill='x')
         entry = ttk.Entry(row, textvariable=self.query)
         entry.pack(side='left', fill='x', expand=True)
         entry.bind('<Return>', lambda _: self.search())
-        ttk.Button(row, text='공식 모델 검색', command=self.search).pack(side='left', padx=6)
-        ttk.Button(row, text='공식 사이트', command=lambda: webbrowser.open('https://ollama.com/search')).pack(side='left')
-        ttk.Label(catalog, text='검색 결과는 Ollama 공식 라이브러리에서 가져옵니다. 선택 후 태그를 고르세요.').pack(anchor='w', pady=8)
+        ttk.Button(row, text='앱 내부 공식 검색', command=self.search).pack(side='left', padx=(6, 0))
+        ttk.Button(row, text='Ollama 공식 사이트',
+                   command=lambda: webbrowser.open('https://ollama.com/search')).pack(side='left', padx=(6, 0))
+        ttk.Button(row, text='선택 모델 설치',
+                   command=self.install_catalog_model).pack(side='left', padx=(6, 0))
+        self.catalog_source_text = tk.StringVar()
+        self.update_catalog_source_text()
+        ttk.Label(catalog, textvariable=self.catalog_source_text).pack(anchor='w', pady=8)
+        self.hardware_text = tk.StringVar(value='PC 메모리 확인 중…')
+        ttk.Label(catalog, textvariable=self.hardware_text).pack(anchor='w', pady=(0, 6))
         holder = ttk.Frame(catalog)
         holder.pack(fill='both', expand=True)
-        self.results = ttk.Treeview(holder, columns=('name', 'description'), show='headings', selectmode='browse')
+        self.results = ttk.Treeview(holder, columns=('name', 'fit', 'description'), show='headings', selectmode='browse')
         self.results.heading('name', text='모델')
+        self.results.heading('fit', text='PC 적합도')
         self.results.heading('description', text='설명 / 크기 / 정보')
         self.results.column('name', width=180, stretch=False)
-        self.results.column('description', width=580)
+        self.results.column('fit', width=190, stretch=False)
+        self.results.column('description', width=480)
         scroll = ttk.Scrollbar(holder, command=self.results.yview)
         self.results.configure(yscrollcommand=scroll.set)
         scroll.pack(side='right', fill='y')
@@ -283,6 +316,7 @@ class App(tk.Tk):
         self.progress = ttk.Progressbar(catalog, maximum=100)
         self.progress.pack(fill='x', pady=7)
         ttk.Label(catalog, textvariable=self.progress_text, wraplength=900).pack(anchor='w')
+        notebook.bind('<<NotebookTabChanged>>', self.on_main_tab_changed, add='+')
         self.transcript = ScrolledText(chat, wrap='word', font=('맑은 고딕', 11), state='disabled', relief='flat', padx=12, pady=12)
         self.transcript.pack(fill='both', expand=True)
         self.prompt = ScrolledText(chat, height=3, wrap='word', font=('맑은 고딕', 11), undo=True)
@@ -324,14 +358,54 @@ class App(tk.Tk):
         self.process = None
         self.online = False
         self.running_models_snapshot = {}
-        self.selected.set('qwen3-it-4b-FLM:latest' if engine == 'lemonade' else '')
-        self.target.set('qwen3-it-4b-FLM:latest' if engine == 'lemonade' else 'gemma3:1b')
+        self.selected.set('')
+        self.target.set('Gemma-4-E2B-it-GGUF' if engine == 'lemonade' else 'gemma3:1b')
         self.models.configure(values=[])
         self.results.delete(*self.results.get_children())
         self.server_frame.configure(text='로컬 서버 · ' + self.client.base_url)
+        self.refresh_recommended_models()
+        self.update_catalog_source_text()
         self.select_model()
         self.refresh()
         self.log('실행 엔진 변경: ' + ENGINE_LABELS[engine])
+
+    def update_catalog_source_text(self):
+        if not hasattr(self, 'catalog_source_text'):
+            return
+        self.catalog_source_text.set(
+            '검색 결과는 Lemonade 공식 카탈로그에서 가져옵니다. CPU/GPU와 지원되는 NPU 챗 모델을 모두 검색합니다.'
+            if self.engine == 'lemonade' else
+            '검색 결과는 Ollama 공식 라이브러리에서 앱 내부로 가져옵니다. 검색어를 비우면 최신 모델 목록을 조회합니다.')
+
+    def refresh_recommended_models(self):
+        if not hasattr(self, 'recommended_frame'):
+            return
+        for child in self.recommended_frame.winfo_children():
+            child.destroy()
+        title = 'Lemonade · CPU/GPU 추천 모델' if self.engine == 'lemonade' else 'Ollama 추천 모델'
+        self.recommended_frame.configure(text=title)
+        for column, (label, model, description) in enumerate(RECOMMENDED_MODELS[self.engine]):
+            card = ttk.Frame(self.recommended_frame, padding=4)
+            card.grid(row=0, column=column, sticky='ew', padx=3)
+            self.recommended_frame.columnconfigure(column, weight=1)
+            ttk.Button(card, text=label + ' 설치',
+                       command=lambda value=model: self.install_recommended_model(value)).pack(fill='x')
+            ttk.Label(card, text=description).pack(anchor='center', pady=(3, 0))
+
+    def install_recommended_model(self, name):
+        allowed = {model for models in RECOMMENDED_MODELS.values() for _, model, _ in models}
+        if name not in allowed:
+            raise ValueError('추천 모델 목록에 없는 모델입니다.')
+        self.target.set(name)
+        self.tags.set(name.split(':', 1)[1] if ':' in name else 'latest')
+        self.tags.configure(values=[self.tags.get()])
+        self.progress_text.set(name + ' 추천 모델 설치를 시작합니다.')
+        self.pull()
+
+    def on_main_tab_changed(self, _=None):
+        if (self.notebook.select() == str(getattr(self, 'catalog_tab', ''))
+                and not self.results.get_children() and 'search' not in self.busy):
+            self.search()
 
     def show_install_tab(self):
         self.notebook.select(self.install_tab)
@@ -891,6 +965,8 @@ class App(tk.Tk):
             self.ai_install_write(text + '\n')
         if key == 'pull':
             self.progress_text.set(text)
+        if key == 'search':
+            self.progress_text.set('공식 모델 검색 실패: ' + text)
         if key == 'chat':
             self.access_log('AI 오류', text)
             self.append(self.transcript, '\n[응답 실패] ' + text + '\n')
@@ -1414,29 +1490,43 @@ class App(tk.Tk):
             return
         self.job('search', lambda: search_models(query), self.show_results)
 
+    def open_catalog_site(self):
+        webbrowser.open('https://fastflowlm.com/models/' if self.engine == 'lemonade'
+                        else 'https://ollama.com/search')
+
     def npu_catalog(self, query):
         data = self.client.get('/api/v1/models?show_all=true', timeout=30)
-        return [(m['id'], f"FastFlowLM · NPU · {m.get('size', '?')} GB")
+        return [(m['id'],
+                 f"Lemonade · {'FastFlowLM NPU' if m.get('recipe') == 'flm' else str(m.get('recipe', 'auto')).upper()} · {m.get('size', '?')} GB")
                 for m in data.get('data', [])
-                if m.get('recipe') == 'flm' and 'chat' in m.get('labels', [])
+                if 'chat' in m.get('labels', [])
                 and query.lower() in m['id'].lower()]
 
     def show_results(self, rows):
+        capacity = hardware_capacity()
+        self.hardware_text.set(
+            f"PC 기준: CPU {capacity['cpu_threads']}스레드 · "
+            f"RAM {capacity['ram_available_gb']:.1f}/{capacity['ram_total_gb']:.1f} GB 사용 가능 · "
+            f"VRAM {capacity['vram_free_gb']:.1f}/{capacity['vram_total_gb']:.1f} GB 사용 가능"
+            + (f" · {capacity['gpu_name']}" if capacity['gpu_name'] else ''))
         self.results.delete(*self.results.get_children())
         for name, description in rows:
-            self.results.insert('', 'end', values=(name, description))
+            fit = model_fit(model_size_gb(description), capacity,
+                            npu='FastFlowLM NPU' in description)
+            self.results.insert('', 'end', values=(name, fit, description))
         self.progress_text.set(f'{len(rows)}개 모델을 가져왔습니다.' if rows else '검색 결과가 없습니다. 공식 사이트를 확인하거나 모델 이름을 직접 입력하세요.')
 
     def pick_result(self, _=None):
         selection = self.results.selection()
         if not selection:
             return
-        name = self.results.item(selection[0], 'values')[0]
-        self.target.set(name + ':latest')
+        name, _, description = self.results.item(selection[0], 'values')[:3]
+        self.target.set(name if self.engine == 'lemonade' else name + ':latest')
         self.tags.set('latest')
         self.tags.configure(values=['latest'])
         if self.engine == 'lemonade':
-            self.progress_text.set('FastFlowLM NPU 전용 모델입니다. 모델 설치 버튼을 누르세요.')
+            kind = 'FastFlowLM NPU' if 'FastFlowLM NPU' in description else 'Lemonade CPU/GPU'
+            self.progress_text.set(kind + ' 모델입니다. 모델 설치 버튼을 누르세요.')
             return
         self.tag_request += 1
         request = self.tag_request
@@ -1456,6 +1546,18 @@ class App(tk.Tk):
             return None
         return self.results.item(selection[0], 'values')
 
+    def install_catalog_model(self):
+        result = self.selected_catalog_result()
+        if not result:
+            return
+        name = result[0]
+        target = name if self.engine == 'lemonade' else name + ':latest'
+        self.target.set(target)
+        self.tags.set('latest')
+        self.tags.configure(values=['latest'])
+        self.progress_text.set(name + ' 설치를 시작합니다.')
+        self.pull()
+
     def open_model_site(self, name=None):
         if self.engine == 'lemonade':
             webbrowser.open('https://fastflowlm.com/models/')
@@ -1471,7 +1573,7 @@ class App(tk.Tk):
         result = self.selected_catalog_result()
         if not result:
             return
-        name, description = result
+        name, fit, description = result
         window = tk.Toplevel(self)
         window.title(name + ' · 전체 설명')
         window.geometry('780x540')
@@ -1482,7 +1584,7 @@ class App(tk.Tk):
         ttk.Label(frame, text='검색 결과의 전체 설명입니다. 상세 문서는 공식 사이트에서 확인하세요.').pack(anchor='w', pady=8)
         body = ScrolledText(frame, wrap='word', font=('맑은 고딕', 11), padx=12, pady=12)
         body.pack(fill='both', expand=True)
-        body.insert('1.0', description or '설명이 없습니다.')
+        body.insert('1.0', f'PC 적합도: {fit}\n\n' + (description or '설명이 없습니다.'))
         body.configure(state='disabled')
         current = self.target.get()
         target = tk.StringVar(window, value=current if current.split(':')[0] == name else name + ':latest')
@@ -1561,6 +1663,7 @@ class App(tk.Tk):
 
     def update_progress(self, value, text):
         self.progress['value'] = value
+        self.recommended_progress['value'] = value
         self.progress_text.set(text)
         marker = (text.split(' · ')[0], int(value) // 10)
         if marker != self.last_pull_log:
