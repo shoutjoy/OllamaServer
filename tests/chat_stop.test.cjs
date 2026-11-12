@@ -18,7 +18,10 @@ async function scenario(mode) {
     });
   };
   state = {
-    AbortController, DOMException, TextDecoder, console,
+    AbortController, DOMException, TextDecoder, console, crypto: require('node:crypto'),
+    chatReady: true, followMessagesRef: {current: true}, systemPrompt: '',
+    generationSettings: {}, buildGenerationSettings: () => ({options: {temperature: 0.7}}),
+    setActiveResponseId: () => {},
     inputText: '중지 테스트', isGenerating: false,
     selectedModel: 'test', customModelInput: '', activeMode: mode,
     MODES: { [mode.toUpperCase()]: { systemPrompt: 'test' } },

@@ -71,12 +71,36 @@ class Client:
     def __init__(self, engine='ollama'):
         self.engine = engine if engine in ENGINE_LABELS else 'ollama'
         self.base_url = engine_url(self.engine)
+        self.safe_draft_models = set()
+
+    def safe_payload(self, data):
+        if self.engine == 'ollama' and data.get('model') in self.safe_draft_models:
+            return dict(data, options=dict(data.get('options') or {}, draft_num_predict=0))
+        return data
+
+    def recover_draft(self, data, error):
+        model = data.get('model', '')
+        if (self.engine == 'ollama' and model.split(':')[0].split('/')[-1] == 'gemma4'
+                and 'Gemma4Assistant' in str(error) and 'vector' in str(error)
+                and (data.get('options') or {}).get('draft_num_predict') != 0):
+            self.safe_draft_models.add(model)
+            return True
+        return False
 
     def get(self, path, timeout=4):
         with open_url(self.base_url + path, timeout=timeout) as response:
             return json.load(response)
 
     def post(self, path, data, timeout=300):
+        data = self.safe_payload(data)
+        try:
+            return self._post(path, data, timeout)
+        except RuntimeError as exc:
+            if path not in ('/api/chat', '/api/generate') or not self.recover_draft(data, exc):
+                raise
+            return self._post(path, self.safe_payload(data), timeout)
+
+    def _post(self, path, data, timeout):
         with open_url(self.base_url + path, data, timeout=timeout) as response:
             result = json.load(response)
         if result.get('status') == 'error' or result.get('error'):
@@ -99,7 +123,25 @@ class Client:
     def stream(self, path, data, cancel=None):
         if path == '/api/chat':
             data = self.prepare_chat(data)
-        with open_url(self.base_url + path, data, timeout=300 if self.engine == 'lemonade' else 120) as response:
+        data = self.safe_payload(data)
+        emitted = False
+        for attempt in range(2):
+            try:
+                for item in self._stream(path, data, cancel):
+                    emitted = True
+                    yield item
+                return
+            except RuntimeError as exc:
+                if (attempt or emitted or path not in ('/api/chat', '/api/generate')
+                        or not self.recover_draft(data, exc)):
+                    raise
+                data = self.safe_payload(data)
+
+    def _stream(self, path, data, cancel):
+        if cancel and cancel.is_set():
+            raise RuntimeError('작업을 취소했습니다.')
+        complete = False
+        with open_url(self.base_url + path, data, timeout=300) as response:
             for line in response:
                 if cancel and cancel.is_set():
                     raise RuntimeError('작업을 취소했습니다.')
@@ -107,7 +149,10 @@ class Client:
                     item = json.loads(line)
                     if item.get('error'):
                         raise RuntimeError(item['error'])
+                    complete = complete or item.get('done') is True
                     yield item
+        if path in ('/api/chat', '/api/generate') and not complete:
+            raise RuntimeError('완료 응답 없이 연결이 종료되었습니다.')
 
 
 class CatalogParser(HTMLParser):

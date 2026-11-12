@@ -48,7 +48,7 @@ class MemoryCleanupTests(unittest.TestCase):
             root.destroy()
 
     def test_app_cleanup_completes_and_auto_mode_can_be_disabled(self):
-        with patch.object(App, 'monitor_resources'), patch.object(App, 'refresh'), patch('app.clean_memory', return_value='정리 완료') as collect:
+        with patch.object(App, 'monitor_resources'), patch.object(App, 'refresh'), patch.object(App, 'start_bridge'), patch.object(App, 'load_startup_model'), patch('app.clean_memory', return_value='정리 완료') as collect:
             app = App()
             app.withdraw()
             try:

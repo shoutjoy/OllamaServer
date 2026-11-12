@@ -20,12 +20,14 @@ from core import ENGINE_LABELS, find_lemonade, effective_performance, model_plac
 from resource_monitor import (ResourcePanel, ResourceSampler, hardware_capacity,
                               model_fit, model_size_gb)
 from memory_cleanup import clean_memory
+from windows_desktop import TrayIcon, startup_enabled, set_startup
+from model_loader import run_ollama_model
 from dark_theme import apply_dark_theme
 from console_runner import ANSI, ConsoleRunner
 from installer_download import DownloadCancelled, download_installer
 from install_commands import COMMANDS, install_args
 from install_terminal import InstallTerminalRunner
-from CHAT.serve_ollama_say import create_server as create_chat_server
+from CHAT.serve_ollama_say import create_server as create_chat_server, CLIENTS as chat_clients
 from open_webui_runner import start as start_open_webui, executable as open_webui_executable, install as install_open_webui
 from lemonade_installer import find_lemonade_cli, lemonade_install_args, fastflowlm_install_args
 
@@ -34,6 +36,7 @@ RESOURCE_ROOT = Path(getattr(sys, '_MEIPASS', SOURCE_ROOT))
 DATA = ((Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'OllamaDesk')
         if getattr(sys, 'frozen', False) else SOURCE_ROOT / '.data')
 MDPRO_URL = 'https://mdproviewer.vercel.app/'
+DEFAULT_MODELS = {'ollama': 'gemma4:e4b', 'lemonade': 'Gemma-4-E4B-it-GGUF:latest'}
 RECOMMENDED_MODELS = {
     'lemonade': [
         ('Gemma 4 E2B', 'Gemma-4-E2B-it-GGUF', 'CPU/GPU · 가벼운 권장 모델'),
@@ -79,6 +82,7 @@ class App(tk.Tk):
         self.installer_path = DATA / 'OllamaSetup.exe'
         self.history = []
         self.running_models_snapshot = {}
+        self.safe_draft_models = set()
         self.online = False
         self.closed = False
         self.tag_request = 0
@@ -89,12 +93,18 @@ class App(tk.Tk):
         self.lemonade_install_status = tk.StringVar(value='설치됨' if find_lemonade() else '미설치')
         self.fastflowlm_install_status = tk.StringVar(value='Lemonade Server 설치 후 설치 가능')
         self.selected = tk.StringVar()
+        self.model_loading = None
+        self.model_loading_timer = None
+        self.model_loading_text = tk.StringVar(value='기본 모델 자동 로딩 대기…')
         self.target = tk.StringVar(value='gemma3:1b')
         self.query = tk.StringVar()
         self.progress_text = tk.StringVar(value='설치할 모델을 검색하거나 이름:태그를 직접 입력하세요.')
         self.model_profiles = {}
         self.ui_theme = 'dark'
         self.performance = dict(PERFORMANCE_DEFAULTS)
+        self.tray_icon = None
+        self.tray_enabled = tk.BooleanVar(value=False)
+        self.startup_enabled = tk.BooleanVar(value=startup_enabled())
         try:
             saved = json.loads((DATA / 'settings.json').read_text('utf-8'))
             self.engine = saved.get('engine', 'ollama') if saved.get('engine') in ENGINE_LABELS else 'ollama'
@@ -103,15 +113,28 @@ class App(tk.Tk):
             self.performance = validate_performance(saved.get('performance', {}))
             self.model_profiles = saved.get('model_profiles', {})
             self.selected.set(saved.get('model', ''))
+            self.tray_enabled.set(bool(saved.get('tray_enabled', False)))
         except (OSError, ValueError):
             pass
+        if not self.selected.get():
+            self.selected.set(DEFAULT_MODELS[self.engine])
+        self.server_sample = (False, '서버 확인 중…')
+        self.cached_models = []
+        self.cached_version = None
+        self.catalog_checked_at = 0
+        self.startup_model_pending = True
+        chat_clients[self.engine] = self.client
         self.build()
         apply_dark_theme(self, self.ui_theme)
         self.monitor_stop = threading.Event()
         threading.Thread(target=self.monitor_resources, daemon=True).start()
-        self.protocol('WM_DELETE_WINDOW', self.close)
+        self.protocol('WM_DELETE_WINDOW', self.hide_or_close)
+        if os.name == 'nt' and self.tray_enabled.get():
+            self.after(100, self.initialize_tray)
         self.after(80, self.drain)
         self.refresh()
+        self.after(250, self.load_startup_model)
+        self.after(100, self.start_bridge)
         self.after(5000, self.poll)
         self.after(60000, self.auto_clean_memory)
 
@@ -156,11 +179,18 @@ class App(tk.Tk):
             child._theme_surface = True
         self.theme_button = ttk.Button(brand, text='일반모드로 전환' if self.ui_theme == 'dark' else '다크모드로 전환', command=self.toggle_theme)
         self.theme_button.pack(side='bottom', pady=24)
+        desktop_options = ttk.Frame(brand, padding=8)
+        desktop_options.pack(side='bottom', fill='x')
+        for label, variable, command in [
+                ('Windows 시작 시 실행', self.startup_enabled, self.toggle_startup),
+                ('시스템 트레이 사용 (닫아도 유지)', self.tray_enabled, self.toggle_tray)]:
+            ttk.Checkbutton(desktop_options, text=label, variable=variable,
+                            command=command, state='normal' if os.name == 'nt' else 'disabled').pack(anchor='w', pady=4)
 
-        outer = ttk.Frame(shell, padding=22)
+        outer = ttk.Frame(shell, padding=14)
         outer.pack(side='left', fill='both', expand=True)
         ttk.Label(outer, text='Ollama Desk', style='Title.TLabel').pack(anchor='w')
-        ttk.Label(outer, text='설치부터 모델 탐색, 로컬 대화까지 한 곳에서').pack(anchor='w', pady=(2, 15))
+        ttk.Label(outer, text='설치부터 모델 탐색, 로컬 대화까지 한 곳에서').pack(anchor='w', pady=(2, 8))
         self.engine_choice = tk.StringVar(value=ENGINE_LABELS[self.engine])
         engine_row = ttk.Frame(outer)
         engine_row.pack(fill='x', pady=(0, 6))
@@ -170,7 +200,7 @@ class App(tk.Tk):
         self.engine_selector.pack(side='left')
         self.engine_selector.bind('<<ComboboxSelected>>', self.change_engine)
         ttk.Label(engine_row, text='Lemonade: CPU/GPU GGUF 또는 지원되는 XDNA 2 NPU의 FLM 모델').pack(side='left', padx=12)
-        server = ttk.LabelFrame(outer, text='로컬 서버 · ' + self.client.base_url, padding=12)
+        server = ttk.LabelFrame(outer, text='로컬 서버 · ' + self.client.base_url, padding=8)
         self.server_frame = server
         server.pack(fill='x')
         self.server_light = tk.Canvas(server, width=22, height=24, bg='#111827', highlightthickness=0)
@@ -195,13 +225,13 @@ class App(tk.Tk):
         ttk.Checkbutton(memory_row, text='유휴 시 자동 정리 (1분 간격)', variable=self.auto_memory).pack(side='left', padx=8)
         self.memory_status = tk.StringVar(value='앱 미사용 객체 정리 · 로그 화면 최대 20만 자 · 대화 유지')
         ttk.Label(memory_row, textvariable=self.memory_status, wraplength=650).pack(side='left', padx=4)
-        ttk.Label(outer, textvariable=self.install_status).pack(anchor='w', pady=8)
         folders = ttk.Frame(outer)
         folders.pack(fill='x', pady=(0, 8))
         ttk.Button(folders, text='Ollama 설치 폴더 열기',
                    command=lambda: self.open_ollama_folder('install')).pack(side='left')
         ttk.Button(folders, text='모델 다운로드 폴더 열기',
                    command=lambda: self.open_ollama_folder('models')).pack(side='left', padx=(8, 0))
+        ttk.Label(folders, textvariable=self.install_status, wraplength=600).pack(side='left', padx=8)
         row = ttk.Frame(outer)
         row.pack(fill='x', pady=(0, 12))
         ttk.Label(row, text='사용할 모델').pack(side='left', padx=(0, 10))
@@ -209,6 +239,13 @@ class App(tk.Tk):
         self.models.pack(side='left', fill='x', expand=True)
         self.models.bind('<<ComboboxSelected>>', self.select_model)
         ttk.Button(row, text='모델 목록 갱신', command=self.refresh).pack(side='left', padx=(8, 0))
+        self.load_model_button = ttk.Button(row, text='모델 로딩', command=self.load_model)
+        self.load_model_button.pack(side='left', padx=(8, 0))
+        loading = ttk.Frame(outer)
+        loading.pack(fill='x', pady=(0, 10))
+        self.model_loading_bar = ttk.Progressbar(loading, maximum=100, length=150)
+        self.model_loading_bar.pack(side='left', padx=(0, 10))
+        ttk.Label(loading, textvariable=self.model_loading_text, wraplength=650).pack(side='left', fill='x', expand=True)
         notebook = ttk.Notebook(outer)
         performance_tab = ttk.Frame(notebook, padding=14)
         notebook.add(performance_tab, text='  성능 설정  ')
@@ -317,17 +354,18 @@ class App(tk.Tk):
         self.progress.pack(fill='x', pady=7)
         ttk.Label(catalog, textvariable=self.progress_text, wraplength=900).pack(anchor='w')
         notebook.bind('<<NotebookTabChanged>>', self.on_main_tab_changed, add='+')
-        self.transcript = ScrolledText(chat, wrap='word', font=('맑은 고딕', 11), state='disabled', relief='flat', padx=12, pady=12)
-        self.transcript.pack(fill='both', expand=True)
+        self.transcript = ScrolledText(chat, height=5, wrap='word', font=('맑은 고딕', 11), state='disabled', relief='flat', padx=12, pady=12)
         self.prompt = ScrolledText(chat, height=3, wrap='word', font=('맑은 고딕', 11), undo=True)
-        self.prompt.pack(fill='x', pady=10)
         self.prompt.bind('<Control-Return>', lambda _: self.send())
         row = ttk.Frame(chat)
-        row.pack(fill='x')
+        row.pack(side='bottom', fill='x')
         ttk.Label(row, text='Ctrl+Enter로 전송 · 모델 변경 시 대화가 초기화됩니다.').pack(side='left')
         ttk.Button(row, text='새 대화', command=self.clear_chat).pack(side='right')
         self.send_button = ttk.Button(row, text='보내기', command=self.send)
         self.send_button.pack(side='right', padx=8)
+        # Reserve the composer before the expanding transcript, even in a short window.
+        self.prompt.pack(side='bottom', fill='x', pady=10)
+        self.transcript.pack(fill='both', expand=True)
         self.log_view = ScrolledText(logs, state='disabled', wrap='word', font=('맑은 고딕', 10))
         self.log_view.pack(fill='both', expand=True)
 
@@ -346,7 +384,7 @@ class App(tk.Tk):
             messagebox.showerror('테마 저장 실패', str(exc), parent=self)
 
     def change_engine(self, _=None):
-        if self.busy:
+        if self.busy - {'refresh', 'bridge'}:
             self.engine_choice.set(ENGINE_LABELS[self.engine])
             self.log('진행 중인 작업이 끝난 뒤 실행 엔진을 변경하세요.')
             return
@@ -355,9 +393,14 @@ class App(tk.Tk):
             return
         self.engine = engine
         self.client = Client(engine)
+        chat_clients[engine] = self.client
         self.process = None
         self.online = False
         self.running_models_snapshot = {}
+        self.cached_version = None
+        self.cached_models = []
+        self.catalog_checked_at = 0
+        self.server_sample = (False, '서버 확인 중…')
         self.selected.set('')
         self.target.set('Gemma-4-E2B-it-GGUF' if engine == 'lemonade' else 'gemma3:1b')
         self.models.configure(values=[])
@@ -683,20 +726,22 @@ class App(tk.Tk):
             except OSError:
                 self.chat_server = create_chat_server()
                 threading.Thread(target=self.chat_server.serve_forever, daemon=True).start()
-                for _ in range(30):
-                    try:
-                        with socket.create_connection(('127.0.0.1', 8767), timeout=0.2):
-                            break
-                    except OSError:
-                        time.sleep(0.1)
-                else:
-                    raise RuntimeError('챗 서버 시작 시간이 초과되었습니다.')
 
             if not webbrowser.open(url, new=2):
                 raise RuntimeError('기본 브라우저를 열지 못했습니다.')
             self.log(f'챗 열기: {url}')
         except (OSError, RuntimeError) as exc:
             messagebox.showerror('챗 열기', str(exc), parent=self)
+
+    def start_bridge(self):
+        def work():
+            server = create_chat_server()
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            return server
+        def done(server):
+            self.chat_server = server
+            self.log('MDPro 호환 연결: http://127.0.0.1:8767 · MDPro Ollama 기본 URL에 입력')
+        self.job('bridge', work, done, quiet=True)
 
     def webui_root(self):
         root = DATA / 'open-webui'
@@ -740,6 +785,9 @@ class App(tk.Tk):
         self.job('open-webui', work, done)
 
     def open_mdpro(self):
+        self.clipboard_clear()
+        self.clipboard_append('http://127.0.0.1:8767')
+        self.log('MDPro 호환 주소를 복사했습니다: http://127.0.0.1:8767 · MDPro 설정 → Ollama 기본 URL에 붙여넣으세요.')
         if webbrowser.open(MDPRO_URL, new=2):
             self.log(f'MDpro 열기: {MDPRO_URL}')
         else:
@@ -1000,48 +1048,57 @@ class App(tk.Tk):
         while not self.monitor_stop.is_set():
             started = time.monotonic()
             sample = sampler.sample()
-            try:
-                self.client.get('/api/version', timeout=1)
-                sample['connected'] = 100
-                try:
-                    sample['placement'] = model_placement(self.client.get('/api/ps', timeout=1).get('models', []), self.engine)
-                except Exception:
-                    sample['placement'] = 'Ollama 모델 배치: 조회 불가'
-            except Exception:
-                sample['connected'] = 0
-                sample['placement'] = 'Ollama 서버 연결 안 됨'
+            connected, placement = self.server_sample
+            sample['connected'] = 100 if connected else 0
+            sample['placement'] = placement
             if self.monitor_stop.is_set():
                 break
             self.emit(self.resource_panel.update_sample, sample)
             self.monitor_stop.wait(max(0.1, 5 - (time.monotonic() - started)))
 
-    def refresh(self):
-        if 'installer' not in self.busy:
+    def refresh(self, full=True):
+        if 'refresh' in self.busy:
+            return
+        if full and 'installer' not in self.busy:
             exe = find_lemonade() if self.engine == 'lemonade' else find_ollama()
             self.install_status.set(ENGINE_LABELS[self.engine] + ' · 설치 위치: ' + (exe or '미설치'))
-        lemonade_exe = find_lemonade()
-        if 'lemonade-install' not in self.busy:
-            self.lemonade_install_status.set('설치됨' if lemonade_exe else '미설치')
-        if 'fastflowlm-install' not in self.busy:
-            self.fastflowlm_install_status.set('설치 가능' if find_lemonade_cli(lemonade_exe) else 'Lemonade Server 설치 필요')
+        if full:
+            lemonade_exe = find_lemonade()
+            if 'lemonade-install' not in self.busy:
+                self.lemonade_install_status.set('설치됨' if lemonade_exe else '미설치')
+            if 'fastflowlm-install' not in self.busy:
+                self.fastflowlm_install_status.set('설치 가능' if find_lemonade_cli(lemonade_exe) else 'Lemonade Server 설치 필요')
+        client = self.client
+        update_catalog = full or time.monotonic() - self.catalog_checked_at >= 30
+        cached_version, cached_models = self.cached_version, self.cached_models
         def work():
             try:
-                version = self.client.get('/api/version')['version']
-                models = self.client.get('/api/tags').get('models', [])
+                version = client.get('/api/version')['version'] if update_catalog or not cached_version else cached_version
+                models = client.get('/api/tags').get('models', []) if update_catalog else cached_models
                 try:
-                    running = self.client.get('/api/ps').get('models', [])
+                    running = client.get('/api/ps').get('models', [])
                 except Exception:
+                    client.get('/api/version', timeout=1)
                     running = None
                 return version, models, running
             except Exception:
                 return None, [], None
-        self.job('refresh', work, self.refreshed, quiet=True)
+        def done(result):
+            if self.client is not client:
+                return
+            if update_catalog and result[0] is not None:
+                self.catalog_checked_at = time.monotonic()
+                self.cached_version, self.cached_models = result[:2]
+            self.refreshed(result)
+        self.job('refresh', work, done, quiet=True)
 
     def refreshed(self, result):
         version, models = result[:2]
         running = result[2] if len(result) > 2 else None
         was_online = self.online
         self.online = version is not None
+        self.server_sample = (self.online, model_placement(running, self.engine)
+                              if running is not None else '모델 배치 조회 대기' if self.online else '서버 연결 안 됨')
         self.status.set(f'서버 동작 중 · {version}' if self.online else '서버 응답 없음')
         color = '#16a34a' if self.online else '#94a3b8'
         self.server_light.itemconfigure(self.server_light_dot, fill=color)
@@ -1049,36 +1106,119 @@ class App(tk.Tk):
         if self.online and not was_online:
             self.log('서버 동작 확인: ' + ENGINE_LABELS[self.engine])
             self.access_log('접속', f'{ENGINE_LABELS[self.engine]} · version={version} · {self.client.base_url}')
-            self.bell()
-            notice = tk.Toplevel(self)
-            notice.title('Ollama 서버 알림')
-            notice.transient(self)
-            notice.resizable(False, False)
-            ttk.Label(notice, text='● ' + ENGINE_LABELS[self.engine] + ' 서버가 동작 중입니다.', foreground='#4ade80', padding=20).pack()
-            ttk.Button(notice, text='확인', command=notice.destroy).pack(pady=(0, 12))
-            notice.after(3500, notice.destroy)
         elif was_online and not self.online:
             self.log('서버 응답이 없어 표시등을 껐습니다.')
             self.access_log('접속 종료', '서버 응답 없음 · ' + self.client.base_url)
         if not self.online:
             self.running_models_snapshot = {}
         names = [m['name'] for m in models]
-        self.models.configure(values=names)
-        if names and self.selected.get() not in names:
+        if self.models.cget('values') != tuple(names):
+            self.models.configure(values=names)
+        starting = getattr(self, 'startup_model_pending', False) is True
+        if names and self.selected.get() not in names and not starting and not {'chat', 'server'} & self.busy:
             self.selected.set(names[0])
             self.select_model()
 
-        if running is not None and 'chat' not in self.busy:
+        if running is not None and not starting and not {'chat', 'server'} & self.busy:
             candidate, self.running_models_snapshot = running_model_change(self.running_models_snapshot, running)
             if candidate and candidate in names and candidate != self.selected.get():
                 self.selected.set(candidate)
-                self.select_model()
+                self.select_model(preserve_chat=True)
+                self.show_external_model_ready(candidate)
                 self.log('외부 앱의 모델 사용 감지: 사용할 모델을 ' + candidate + '로 변경했습니다.')
+
+    def show_external_model_ready(self, model):
+        if self.model_loading is not None:
+            return
+        self.model_loading_bar.stop()
+        self.model_loading_bar.configure(mode='determinate', value=100)
+        self.model_loading_text.set(model + ' · 외부 앱에서 모델 로딩 / 사용 확인 · 준비 완료')
+
+    def load_startup_model(self):
+        if self.closed:
+            return
+        if self.busy - {'refresh'}:
+            self.after(250, self.load_startup_model)
+            return
+        self.load_model(startup=True)
+
+    def load_model(self, startup=False):
+        if self.busy - {'refresh'}:
+            self.log('진행 중인 작업이 끝난 뒤 모델을 로딩하세요.')
+            return
+        client = self.client
+        try:
+            model = model_name(self.selected.get() or DEFAULT_MODELS[self.engine])
+        except ValueError as exc:
+            messagebox.showinfo('모델 선택', str(exc), parent=self)
+            return
+        settings = effective_performance({'performance': self.performance,
+                                          'model_profiles': self.model_profiles}, model)
+        self.selected.set(model)
+        self.select_model()
+        self.begin_model_loading('startup', model)
+        self.load_model_button.configure(state='disabled')
+        self.models.configure(state='disabled')
+
+        def work():
+            try:
+                try:
+                    client.get('/api/version')
+                except Exception:
+                    exe = find_lemonade() if client.engine == 'lemonade' else find_ollama()
+                    if not exe:
+                        raise RuntimeError('모델을 로딩하려면 먼저 AI 엔진을 설치하세요.')
+                    if client.engine == 'lemonade':
+                        self.start_npu_server_worker(exe, settings, prepare_model=False)
+                    else:
+                        self.start_server_worker(exe, settings)
+                names = [item['name'] for item in client.get('/api/tags').get('models', [])]
+                if startup:
+                    running = client.get('/api/ps').get('models', [])
+                    if running:
+                        self.emit(self.keep_running_models, running)
+                        return None
+                if model not in names:
+                    raise RuntimeError(f'모델 {model}이 설치되어 있지 않습니다. 먼저 모델을 설치하세요.')
+                if client.engine == 'lemonade':
+                    client.post('/api/v1/load', {'model_name': model.removesuffix(':latest'),
+                                                'ctx_size': settings['context_length']})
+                else:
+                    safe_draft = run_ollama_model(None, client, model, settings,
+                                                 lambda text: self.emit(self.console_write, text))
+                    if safe_draft:
+                        self.emit(self.safe_draft_models.add, model)
+            except Exception:
+                self.emit(self.finish_model_loading, 'startup', False)
+                raise
+            finally:
+                if startup:
+                    self.emit(setattr, self, 'startup_model_pending', False)
+                self.emit(self.load_model_button.configure, {'state': 'normal'})
+                self.emit(self.models.configure, {'state': 'readonly'})
+            self.emit(self.finish_model_loading, 'startup', True)
+            return model
+
+        def done(name):
+            if name:
+                self.log(('시작 모델 로딩 완료: ' if startup else '선택 모델 로딩 완료: ') + name)
+            self.refresh()
+
+        self.job('server', work, done)
+
+    def keep_running_models(self, running):
+        names = [item.get('name') or item.get('model') for item in running]
+        self.finish_model_loading('startup', True)
+        if len(names) == 1 and names[0]:
+            self.selected.set(names[0])
+            self.select_model()
+        self.model_loading_text.set('기존 서버 모델 유지 · ' + ', '.join(filter(None, names)))
+        self.log('기존 모델을 유지하고 시작 시 추가 로딩을 생략했습니다.')
 
     def poll(self):
         if not self.closed:
-            self.refresh()
-            self.after(5000, self.poll)
+            self.refresh(full=False)
+            self.after(2000, self.poll)
 
     def build_performance(self, frame):
         # Actions stay visible while only the settings column scrolls.
@@ -1174,7 +1314,7 @@ class App(tk.Tk):
             self.model_profiles[model] = settings
             DATA.mkdir(exist_ok=True)
             (DATA / 'settings.json').write_text(json.dumps({'engine': self.engine, 'theme': self.ui_theme, 'model': model, 'performance': self.performance,
-                'model_profiles': self.model_profiles}, ensure_ascii=False), 'utf-8')
+                'model_profiles': self.model_profiles, 'tray_enabled': self.tray_enabled.get()}, ensure_ascii=False), 'utf-8')
             self.log(model + ' 성능 프로필 저장: 관리자 대화와 CHAT 다음 요청부터 적용')
         except (ValueError, OSError) as exc:
             messagebox.showerror('설정 저장 실패', str(exc), parent=self)
@@ -1225,7 +1365,7 @@ class App(tk.Tk):
         try:
             settings = validate_performance({key: var.get() for key, var in self.performance_vars.items()})
             DATA.mkdir(exist_ok=True)
-            (DATA / 'settings.json').write_text(json.dumps({'engine': self.engine, 'theme': self.ui_theme, 'model': self.selected.get(), 'performance': settings, 'model_profiles': self.model_profiles}, ensure_ascii=False), 'utf-8')
+            (DATA / 'settings.json').write_text(json.dumps({'engine': self.engine, 'theme': self.ui_theme, 'model': self.selected.get(), 'performance': settings, 'model_profiles': self.model_profiles, 'tray_enabled': self.tray_enabled.get()}, ensure_ascii=False), 'utf-8')
         except (ValueError, OSError) as exc:
             messagebox.showerror('설정 저장 실패', str(exc), parent=self)
             return
@@ -1281,7 +1421,7 @@ class App(tk.Tk):
                 time.sleep(0.5)
         raise RuntimeError('서버 시작 확인 시간이 초과되었습니다. 로그를 확인하세요.')
 
-    def start_npu_server_worker(self, exe, settings):
+    def start_npu_server_worker(self, exe, settings, prepare_model=True):
         try:
             self.client.get('/api/version')
         except Exception:
@@ -1296,6 +1436,8 @@ class App(tk.Tk):
                     time.sleep(0.5)
             else:
                 raise RuntimeError('Lemonade 시작 실패. .data/lemonade.log를 확인하세요.')
+        if not prepare_model:
+            return 'Lemonade 서버 연결 완료'
         models = self.client.get('/api/tags')['models']
         available = [m['name'] for m in models if m.get('details', {}).get('family') == 'flm']
         if not available:
@@ -1303,7 +1445,13 @@ class App(tk.Tk):
         selected = self.selected.get()
         preferred = 'qwen3-it-4b-FLM:latest'
         selected = selected if selected in available else preferred if preferred in available else available[0]
-        self.client.prepare_chat({'model': selected, 'options': {'num_ctx': settings['context_length']}})
+        self.emit(self.begin_model_loading, 'server', selected)
+        try:
+            self.client.prepare_chat({'model': selected, 'options': {'num_ctx': settings['context_length']}})
+        except Exception:
+            self.emit(self.finish_model_loading, 'server', False)
+            raise
+        self.emit(self.finish_model_loading, 'server', True)
         return 'Lemonade + FastFlowLM NPU 서버 준비 완료 · turbo · ' + selected
 
 
@@ -1321,13 +1469,28 @@ class App(tk.Tk):
 
     def stop_server_worker(self, owned):
         if self.client.engine == 'lemonade':
-            # Unload the backend before closing the tray/server so the NPU process exits.
-            self.client.post('/api/v1/unload', {})
+            # A stalled/unavailable HTTP server must not prevent quitting the tray.
+            try:
+                self.client.post('/api/v1/unload', {}, timeout=5)
+            except Exception:
+                pass
             exe = find_lemonade()
             if not exe or os.name != 'nt':
-                raise RuntimeError('Lemonade 트레이 메뉴에서 서버를 종료하세요.')
+                raise RuntimeError('Lemonade 실행 파일을 찾을 수 없어 종료하지 못했습니다.')
             path = str(Path(exe).resolve()).replace("'", "''")
-            script = "$p='" + path + "'; Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $p } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop }"
+            # Query executable paths without WMI/CIM, and limit termination to this install.
+            # /T also closes the FLM/backend children owned by the server.
+            script = ("$ErrorActionPreference='Stop'; $p='" + path + "'; "
+                      "$targets=@(Get-Process -Name LemonadeServer -ErrorAction SilentlyContinue | "
+                      "Where-Object { $_.Path -eq $p }); "
+                      "foreach ($target in $targets) { "
+                      "& taskkill.exe /PID $target.Id /T /F | Out-Null; "
+                      "if ($LASTEXITCODE -ne 0 -and (Get-Process -Id $target.Id -ErrorAction SilentlyContinue)) "
+                      "{ throw 'Lemonade process termination failed' } }; "
+                      "foreach ($target in $targets) { Wait-Process -Id $target.Id -Timeout 10 -ErrorAction SilentlyContinue }; "
+                      "$remaining=@(Get-Process -Name LemonadeServer -ErrorAction SilentlyContinue | "
+                      "Where-Object { $_.Path -eq $p }); "
+                      "if ($remaining.Count) { throw 'Lemonade tray is still running' }")
             subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
                            check=True, capture_output=True, creationflags=NO_WINDOW, timeout=20)
             self.process = None
@@ -1677,16 +1840,17 @@ class App(tk.Tk):
         self.refresh()
         self.log(name + ' 설치 완료')
 
-    def select_model(self, _=None):
+    def select_model(self, _=None, preserve_chat=False):
         DATA.mkdir(exist_ok=True)
         try:
-            (DATA / 'settings.json').write_text(json.dumps({'engine': self.engine, 'theme': self.ui_theme, 'model': self.selected.get(), 'performance': self.performance, 'model_profiles': self.model_profiles}, ensure_ascii=False), 'utf-8')
+            (DATA / 'settings.json').write_text(json.dumps({'engine': self.engine, 'theme': self.ui_theme, 'model': self.selected.get(), 'performance': self.performance, 'model_profiles': self.model_profiles, 'tray_enabled': self.tray_enabled.get()}, ensure_ascii=False), 'utf-8')
         except OSError as exc:
             self.log('설정 저장 실패: ' + str(exc))
         if self.selected.get():
             self.access_log('모델 선택', self.selected.get())
         self.set_performance_fields(effective_performance({'performance': self.performance, 'model_profiles': self.model_profiles}, self.selected.get()))
-        self.clear_chat()
+        if not preserve_chat:
+            self.clear_chat()
 
     def clear_chat(self):
         if 'chat' in self.busy:
@@ -1696,7 +1860,42 @@ class App(tk.Tk):
         self.transcript.delete('1.0', 'end')
         self.transcript.configure(state='disabled')
 
+    def begin_model_loading(self, owner, model):
+        if self.model_loading_timer is not None:
+            self.after_cancel(self.model_loading_timer)
+            self.model_loading_timer = None
+        self.model_loading = (owner, model, time.monotonic())
+        self.model_loading_bar.stop()
+        self.model_loading_bar.configure(mode='indeterminate', value=0)
+        self.model_loading_bar.start(12)
+        self.tick_model_loading()
+
+    def tick_model_loading(self):
+        self.model_loading_timer = None
+        if self.model_loading is None or self.closed:
+            return
+        _, model, started = self.model_loading
+        elapsed = int(time.monotonic() - started)
+        self.model_loading_text.set(f'{model} · 모델 로딩 / 응답 준비 중… {elapsed}초')
+        self.model_loading_timer = self.after(1000, self.tick_model_loading)
+
+    def finish_model_loading(self, owner, success):
+        if self.model_loading is None or self.model_loading[0] != owner:
+            return
+        _, model, started = self.model_loading
+        self.model_loading = None
+        if self.model_loading_timer is not None:
+            self.after_cancel(self.model_loading_timer)
+            self.model_loading_timer = None
+        self.model_loading_bar.stop()
+        self.model_loading_bar.configure(mode='determinate', value=100 if success else 0)
+        state = '모델 준비 완료' if success else '모델 로딩 / 응답 준비 실패'
+        self.model_loading_text.set(f'{model} · {state} · {time.monotonic() - started:.1f}초')
+
     def send(self):
+        if 'server' in self.busy:
+            messagebox.showinfo('모델 준비 중', '서버와 기본 모델 준비가 끝난 뒤 대화를 시작하세요.')
+            return 'break'
         if 'console' in self.busy:
             messagebox.showinfo('명령 실행 중', '콘솔 명령을 먼저 중지하세요.')
             return 'break'
@@ -1715,25 +1914,48 @@ class App(tk.Tk):
         messages = self.history + [{'role': 'user', 'content': text}]
         request = {'model': model, 'messages': messages, 'stream': True}
         request.update(chat_performance(effective_performance({'performance': self.performance, 'model_profiles': self.model_profiles}, model), model))
+        safe_draft_models = getattr(self, 'safe_draft_models', None)
+        if isinstance(safe_draft_models, set) and model in safe_draft_models:
+            request['options']['draft_num_predict'] = 0
         started = time.monotonic()
         self.access_log('AI 요청', f'model={model} · messages={len(messages)}\n질문: {text}')
         self.prompt.delete('1.0', 'end')
         self.append(self.transcript, '\n나: ' + text + '\n\n' + model + ': ')
         self.send_button.configure(state='disabled')
         self.models.configure(state='disabled')
+        self.begin_model_loading('chat', model)
+        client = self.client
         def work():
-            answer = ''
+            parts = []
+            pending = []
+            last_paint = time.monotonic()
             complete = False
+            ready = False
             try:
-                for item in self.client.stream('/api/chat', request):
+                for item in client.stream('/api/chat', request):
+                    message = item.get('message', {})
+                    if not ready and (message.get('content') or message.get('thinking') or item.get('done')):
+                        ready = True
+                        self.emit(self.finish_model_loading, 'chat', True)
                     chunk = item.get('message', {}).get('content', '')
-                    answer += chunk
-                    self.emit(self.append, self.transcript, chunk)
+                    if chunk:
+                        parts.append(chunk)
+                        pending.append(chunk)
+                    if pending and (len(parts) == 1 or time.monotonic() - last_paint >= .05 or item.get('done')):
+                        self.emit(self.append, self.transcript, ''.join(pending))
+                        pending.clear()
+                        last_paint = time.monotonic()
                     complete = item.get('done', False)
                 if not complete:
                     raise RuntimeError('완료 응답 없이 연결이 종료되었습니다.')
-                return messages + [{'role': 'assistant', 'content': answer}]
+                if not parts:
+                    raise RuntimeError('답변 내용이 없습니다. 추론만 생성했거나 출력 한도에 도달했습니다. 출력 한도 또는 추론 설정을 확인하세요.')
+                return messages + [{'role': 'assistant', 'content': ''.join(parts)}]
             finally:
+                if pending:
+                    self.emit(self.append, self.transcript, ''.join(pending))
+                if not ready:
+                    self.emit(self.finish_model_loading, 'chat', False)
                 self.emit(self.models.configure, {'state': 'readonly'})
         def done(history):
             self.history = history if self.selected.get() == model else []
@@ -1744,6 +1966,61 @@ class App(tk.Tk):
             self.access_log('AI 응답', f'model={model} · {elapsed:.2f}초 · {len(answer)}자\n답변: {answer}')
         self.job('chat', work, done)
         return 'break'
+
+    def write_settings(self, settings):
+        path = DATA / 'settings.json'
+        DATA.mkdir(parents=True, exist_ok=True)
+        settings['tray_enabled'] = self.tray_enabled.get()
+        path.write_text(json.dumps(settings, ensure_ascii=False), 'utf-8')
+
+    def toggle_startup(self):
+        try:
+            set_startup(self.startup_enabled.get())
+        except OSError as exc:
+            self.startup_enabled.set(startup_enabled())
+            messagebox.showerror('자동 실행 설정 실패', str(exc), parent=self)
+
+    def initialize_tray(self):
+        if self.toggle_tray() and '--startup' in sys.argv:
+            self.withdraw()
+
+    def toggle_tray(self):
+        try:
+            if self.tray_enabled.get() and self.tray_icon is None:
+                icon = TrayIcon(RESOURCE_ROOT / 'Icon' / 'Ollama.ico',
+                                lambda: self.emit(self.show_window),
+                                lambda: self.emit(self.close))
+                try:
+                    icon.start()
+                except OSError:
+                    icon.stop()
+                    raise
+                self.tray_icon = icon
+            elif not self.tray_enabled.get() and self.tray_icon is not None:
+                self.show_window()
+                self.tray_icon.stop()
+                self.tray_icon = None
+            path = DATA / 'settings.json'
+            saved = json.loads(path.read_text('utf-8')) if path.exists() else {}
+            self.write_settings(saved)
+            return True
+        except (OSError, ValueError) as exc:
+            self.tray_enabled.set(self.tray_icon is not None)
+            self.show_window()
+            messagebox.showerror('트레이 설정 실패', str(exc), parent=self)
+            return False
+
+    def show_window(self):
+        self.deiconify()
+        self.state('normal')
+        self.lift()
+        self.focus_force()
+
+    def hide_or_close(self):
+        if self.tray_icon is not None and self.tray_enabled.get():
+            self.withdraw()
+        else:
+            self.close()
 
     def close(self):
         active = self.busy - {'refresh'}
@@ -1757,6 +2034,8 @@ class App(tk.Tk):
             messagebox.showerror('작업 중지 실패', str(exc), parent=self)
             return
         self.closed = True
+        if self.tray_icon is not None:
+            self.tray_icon.stop()
         self.monitor_stop.set()
         self.destroy()
 

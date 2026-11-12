@@ -127,6 +127,8 @@ class ResourceSampler:
     def __init__(self):
         self.previous = None
         self.nvidia = shutil.which('nvidia-smi')
+        self.gpu_checked_at = None
+        self.gpu_sample = {}
 
     def sample(self):
         result = {'cpu': None, 'ram': None, 'gpu': None, 'npu': None,
@@ -150,6 +152,10 @@ class ResourceSampler:
                     result['ram_detail'] += ' · RAM 부족: 컨텍스트/상주 모델 축소 권장'
         except (OSError, AttributeError):
             pass
+        if self.gpu_checked_at is not None and time.monotonic() - self.gpu_checked_at < 15:
+            result.update(self.gpu_sample)
+            return result
+        self.gpu_checked_at = time.monotonic()
         try:
             script = r"""
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
@@ -177,16 +183,17 @@ $engines = @(Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUE
             result['gpu_detail'] = '장치별 Windows 엔진 사용률 · Ollama 전용 아님'
         except (OSError, subprocess.SubprocessError, ValueError, TypeError):
             pass
+        self.gpu_sample = {key: result[key] for key in ('gpus', 'gpu', 'npu', 'gpu_detail', 'npu_detail') if key in result}
         return result
 
 
 class ResourcePanel(ttk.LabelFrame):
     def __init__(self, parent):
-        super().__init__(parent, text='실시간 상태 · 이 PC 전체 사용량 · 약 5초 간격 · 최근 5분', padding=6)
+        super().__init__(parent, text='실시간 상태 · PC 전체 · CPU/RAM 5초 · GPU/NPU 15초 · 최근 5분', padding=6)
         self.samples = deque(maxlen=61)
         self.placement = ttk.Label(self, text='Ollama 모델 배치: 조회 대기', wraplength=950)
         self.placement.pack(fill='x', pady=(0, 4))
-        self.canvas = Canvas(self, height=132, background='#101827', highlightthickness=0)
+        self.canvas = Canvas(self, height=96, background='#101827', highlightthickness=0)
         self.canvas._theme_background = '#101827'
         self.canvas.pack(fill='x', expand=True)
         self.canvas.bind('<Configure>', lambda event: self.draw())
@@ -202,6 +209,8 @@ class ResourcePanel(ttk.LabelFrame):
         width = max(canvas.winfo_width(), 400)
         newest = self.samples[-1][1] if self.samples else {}
         now = self.samples[-1][0] if self.samples else time.monotonic()
+        plot_bottom = max(65, canvas.winfo_height() - 20)
+        plot_scale = (plot_bottom - 52) / 100
         devices = newest.get('gpus', [])
         columns = [('connected', '서버 연결', '#34d399')]
         columns += [(d['id'], d['kind'] + ' GPU', '#a78bfa') for d in devices] or [('gpu', 'GPU', '#a78bfa')]
@@ -221,7 +230,7 @@ class ResourcePanel(ttk.LabelFrame):
                 detail = device['name']
             canvas.create_text(left, 35, width=right-left, text=detail, fill='#94a3b8', anchor='w', font=('맑은 고딕', 8))
             for level in (0, 50, 100):
-                y = 112 - level * .55
+                y = plot_bottom - level * plot_scale
                 canvas.create_line(left, y, right, y, fill='#263449')
             points = []
             for stamp, item in self.samples:
@@ -232,11 +241,11 @@ class ResourcePanel(ttk.LabelFrame):
                     points = []
                     continue
                 x = right - min(300, now - stamp) / 300 * (right - left)
-                points.extend((x, 112 - number * .55))
+                points.extend((x, plot_bottom - number * plot_scale))
             if len(points) >= 4:
                 canvas.create_line(*points, fill=color, width=2)
             elif points:
                 x, y = points
                 canvas.create_oval(x-2, y-2, x+2, y+2, fill=color, outline='')
-            canvas.create_text(left, 124, text='5분 전', anchor='w', fill='#64748b', font=('맑은 고딕', 8))
-            canvas.create_text(right, 124, text='현재', anchor='e', fill='#64748b', font=('맑은 고딕', 8))
+            canvas.create_text(left, plot_bottom + 12, text='5분 전', anchor='w', fill='#64748b', font=('맑은 고딕', 8))
+            canvas.create_text(right, plot_bottom + 12, text='현재', anchor='e', fill='#64748b', font=('맑은 고딕', 8))

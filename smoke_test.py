@@ -20,7 +20,8 @@ def stream(path, data, cancel=None):
 
 with patch('app.Client.get', side_effect=get), patch('app.Client.stream', side_effect=stream), \
      patch('app.search_models', return_value=[('test', 'Test model')]), \
-     patch('app.fetch_tags', return_value=['1b']), patch('app.App.select_model'):
+     patch('app.fetch_tags', return_value=['1b']), patch('app.App.select_model'), \
+     patch('app.App.load_startup_model'), patch('app.App.start_bridge'):
     app = App()
     from tkinter import ttk
     style = ttk.Style(app)
@@ -95,7 +96,7 @@ with patch('app.Client.get', side_effect=get), patch('app.Client.stream', side_e
     import tkinter as tk
     from tkinter.scrolledtext import ScrolledText
     description = '긴 모델 설명 / 크기 / 정보 ' * 200
-    app.results.item(app.results.selection()[0], values=('test', description))
+    app.results.item(app.results.selection()[0], values=('test', 'FIT', description))
     app.show_model_details()
     app.update()
     detail = [w for w in app.winfo_children() if isinstance(w, tk.Toplevel)][-1]
@@ -104,7 +105,7 @@ with patch('app.Client.get', side_effect=get), patch('app.Client.stream', side_e
             yield child
             yield from descendants(child)
     body = next(w for w in descendants(detail) if isinstance(w, ScrolledText))
-    assert body.get('1.0', 'end-1c') == description
+    assert body.get('1.0', 'end-1c') == 'PC 적합도: FIT\n\n' + description
     assert body.cget('wrap') == 'word'
     with patch('app.webbrowser.open') as opener:
         app.open_model_site()

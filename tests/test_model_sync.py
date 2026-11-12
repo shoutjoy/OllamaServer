@@ -30,7 +30,8 @@ class ModelSyncTests(unittest.TestCase):
         result = ('test', [{'name': 'a'}, {'name': 'b'}], [{'name': 'b', 'expires_at': '2'}])
         App.refreshed(app, result)
         app.selected.set.assert_called_once_with('b')
-        app.select_model.assert_called_once_with()
+        app.select_model.assert_called_once_with(preserve_chat=True)
+        app.show_external_model_ready.assert_called_once_with('b')
         app.selected.set.reset_mock()
         app.running_models_snapshot = {'a': '1'}
         app.busy = {'chat'}
@@ -42,7 +43,10 @@ class ModelSyncTests(unittest.TestCase):
         app = Mock()
         app.engine = 'ollama'
         app.busy = set()
-        app.client.get.side_effect = [{'version': 'test'}, {'models': [{'name': 'a'}]}, OSError('ps unavailable')]
+        app.cached_version = None
+        app.cached_models = []
+        app.catalog_checked_at = 0
+        app.client.get.side_effect = [{'version': 'test'}, {'models': [{'name': 'a'}]}, OSError('ps unavailable'), {'version': 'test'}]
         app.job.side_effect = lambda key, work, done, **kw: done(work())
         with patch('app.find_ollama', return_value='ollama'):
             App.refresh(app)

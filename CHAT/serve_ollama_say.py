@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT.parent))
 from core import Client, chat_performance, effective_performance, open_url
 SETTINGS = ((Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'OllamaDesk')
             if getattr(sys, 'frozen', False) else ROOT.parent / '.data') / 'settings.json'
+CLIENTS = {engine: Client(engine) for engine in ('ollama', 'lemonade')}
 
 
 def optimized_payload(payload):
@@ -49,7 +50,7 @@ def selected_client():
         saved = json.loads(SETTINGS.read_text('utf-8'))
     except (OSError, ValueError):
         saved = {}
-    return Client(saved.get('engine', 'ollama'))
+    return CLIENTS.get(saved.get('engine'), CLIENTS['ollama'])
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, _format, *args):
@@ -60,7 +61,31 @@ class Handler(BaseHTTPRequestHandler):
     def allowed(self):
         hosts = {f'127.0.0.1:{PORT}', f'localhost:{PORT}'}
         origin = self.headers.get('Origin')
-        return self.headers.get('Host') in hosts and (not origin or origin in {f'http://{h}' for h in hosts})
+        parsed = urlsplit(origin or '')
+        trusted = (not origin or origin == 'https://mdproviewer.vercel.app'
+                   or (parsed.scheme == 'http' and parsed.hostname in ('127.0.0.1', 'localhost', '::1')))
+        return self.headers.get('Host') in hosts and trusted
+
+    def end_headers(self):
+        if self.allowed() and self.headers.get('Origin'):
+            self.send_header('Access-Control-Allow-Origin', self.headers['Origin'])
+            self.send_header('Vary', 'Origin')
+            self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type, Accept')
+            if self.headers.get('Access-Control-Request-Private-Network') == 'true':
+                self.send_header('Access-Control-Allow-Private-Network', 'true')
+        self.send_header('Cache-Control', 'no-store')
+        super().end_headers()
+
+    def do_OPTIONS(self):
+        if not self.allowed():
+            return self.send_error(403)
+        self.send_response(204)
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def api_path(self):
+        return self.path.removeprefix('/ollama')
 
     def send_data(self, status, data, content_type='application/json; charset=utf-8'):
         self.send_response(status)
@@ -76,8 +101,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self.path in ('/', '/ollama-say.html'):
                 self.send_data(200, (ROOT / 'ollama-say.html').read_bytes(), 'text/html; charset=utf-8')
-            elif self.path == '/ollama/api/tags':
+            elif self.api_path() == '/api/tags':
                 self.send_data(200, json.dumps(list_models(), ensure_ascii=False).encode())
+            elif self.api_path() in ('/api/ps', '/api/version'):
+                result = selected_client().get(self.api_path())
+                self.send_data(200, json.dumps(result, ensure_ascii=False).encode())
             elif self.path.startswith('/academic/arxiv?'):
                 params = parse_qs(urlsplit(self.path).query)
                 query = (params.get('q') or [''])[0].strip()
@@ -96,31 +124,47 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.allowed():
             return self.send_error(403)
-        if self.path != '/ollama/api/chat':
+        path = self.api_path()
+        if path not in ('/api/chat', '/api/generate', '/api/show'):
             return self.send_error(404)
         started = False
         try:
             size = int(self.headers.get('Content-Length', 0))
             if not 0 < size <= 4_000_000:
                 return self.send_error(413)
-            payload = self.rfile.read(size)
+            payload = json.loads(self.rfile.read(size))
             client = selected_client()
-            payload = client.prepare_chat(optimized_payload(json.loads(payload)))
-            with open_url(client.base_url + '/api/chat', data=payload, timeout=300) as response:
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/x-ndjson')
-                self.send_header('Connection', 'close')
-                self.end_headers()
-                started = True
-                self.close_connection = True
-                for line in response:
-                    self.wfile.write(line)
-                    self.wfile.flush()
+            if path == '/api/show':
+                result = client.post(path, payload)
+                return self.send_data(200, json.dumps(result, ensure_ascii=False).encode())
+            payload = optimized_payload(payload)
+            if payload.get('stream') is False:
+                if path == '/api/chat':
+                    payload = client.prepare_chat(payload)
+                result = client.post(path, payload)
+                return self.send_data(200, json.dumps(result, ensure_ascii=False).encode())
+            # Delay response headers until upstream produces a valid first item.
+            # This allows a known draft crash to recover before a 200 response.
+            for item in client.stream(path, payload):
+                if not started:
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/x-ndjson')
+                    self.send_header('Connection', 'close')
+                    self.end_headers()
+                    started = True
+                    self.close_connection = True
+                self.wfile.write((json.dumps(item, ensure_ascii=False) + '\n').encode())
+                self.wfile.flush()
+            if not started:
+                raise RuntimeError('서버 응답 없이 연결이 종료되었습니다.')
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as exc:
             if not started:
                 self.send_data(502, json.dumps({'error': str(exc)}).encode())
+            else:
+                self.wfile.write((json.dumps({'error': str(exc)}) + '\n').encode())
+                self.wfile.flush()
 
 def create_server():
     return ThreadingHTTPServer(('127.0.0.1', PORT), Handler)
